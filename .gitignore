@@ -33,3 +33,9 @@ src-tauri/_*.rs
 .mimosa/
 .zcode/
 .zcodeignore
+
+# 临时拉取的上游参考文件（不属于本项目）
+/upstream/
+
+# 本地调试产物
+/runs*.json
