@@ -4,9 +4,7 @@
 
 ![tech](https://img.shields.io/badge/Rust-1.77+-DEA584) ![tech](https://img.shields.io/badge/Tauri-2-24C8D8) ![tech](https://img.shields.io/badge/React-18-61DAFB) ![platform](https://img.shields.io/badge/platform-Windows-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-D22128)
 
-<!-- 截图占位：请把本项目自己的界面截图放在 docs/screenshot.png 后改为
-     <img src="docs/screenshot.png" ... />。此处原为上游作者托管在
-     LingyunStudio/LingyunImg 的图片，非本项目资产，已移除。 -->
+<img src="docs/screenshot.png" alt="Yimai Music 界面预览" width="820" />
 
 ## ✨ 功能特性
 

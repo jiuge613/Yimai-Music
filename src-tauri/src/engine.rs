@@ -208,6 +208,15 @@ impl Output {
             }
         }
     }
+
+    /// 当前变体是否独占（不管会话死活）。
+    ///
+    /// 与 is_exclusive 的区别：会话线程已退出时变体仍是 Exclusive，
+    /// 直接 append/clear 会撞 unreachable!()。所有"是否切回共享后端"
+    /// 的判定必须用这里，UI 展示才用 is_exclusive。
+    fn is_exclusive_variant(&self) -> bool {
+        matches!(self, Output::Exclusive(_))
+    }
 }
 
 /// 等待独占会话线程退出的上限。设备被独占客户端占用期间新的共享流打不开，
@@ -438,7 +447,8 @@ impl Engine {
                 *old = Output::Shared(sink);
                 *self.out.write() = handle;
             }
-            self.sync_exclusive_status();
+            // old 已释放写锁（块结束），这里只写 exclusive_status
+            self.sync_exclusive_status(false);
 
             if let Some(info) = info {
                 // 当前有曲目：从 pos 处重建播放链。
@@ -597,6 +607,11 @@ impl Engine {
         src_rate: u32,
     ) -> Result<(), String> {
         if self.exclusive_requested.load(Ordering::Relaxed) && !self.exclusive_in_cooldown() {
+            // 开新会话前必须先停掉旧后端：独占会话占着设备时，
+            // 新会话与共享流都会以 AUDCLNT_E_DEVICE_INVALIDATED(0x8889000A)
+            // 打开失败（表现为切歌必失败）。stop() 对独占会等待会话线程
+            // 真正退出、设备交还系统。
+            self.output.write().stop();
             let pref = self.device_pref.read().clone();
             let params = crate::wasapi_out::ExclusiveParams {
                 device_pref: pref.clone(),
@@ -615,9 +630,15 @@ impl Engine {
                     match rx.recv_timeout(EXCLUSIVE_OPEN_TIMEOUT) {
                         Ok(Ok(())) => {
                             let mut out = self.output.write();
-                            out.stop();
                             *out = Output::Exclusive(ctl);
-                            self.sync_exclusive_status();
+                            let active = out.is_exclusive();
+                            // 必须先释放写锁：sync_exclusive_status 内部要读
+                            // output，写锁未释放时重入读锁会自死锁
+                            //（RwLock 写优先，同一线程等自己的写锁释放）。
+                            // 历史上这里直接调用，独占首播成功但 start()
+                            // 永远不返回 —— 表现为"歌在放但播放器无响应"。
+                            drop(out);
+                            self.sync_exclusive_status(active);
                             return Ok(());
                         }
                         Ok(Err(e)) => {
@@ -644,26 +665,32 @@ impl Engine {
             let pref = self.device_pref.read().clone();
             let (handle, sink) = Self::build_output_resilient(pref.as_deref())?;
             let mut out = self.output.write();
-            out.stop();
             *out = Output::Shared(sink);
             *self.out.write() = handle;
             out.clear();
             out.append(BoxedSrc(Box::new(src)))?;
             out.play();
-            self.sync_exclusive_status();
+            let active = out.is_exclusive();
+            drop(out);
+            self.sync_exclusive_status(active);
             return Ok(());
         }
 
         // 共享模式：按需把后端切回共享
-        if self.output.read().is_exclusive() {
+        // 判定用 is_exclusive_variant：会话即使已退出，变体仍是 Exclusive，
+        // 不切回的话下面的 clear/append 会撞 unreachable!()。
+        if self.output.read().is_exclusive_variant() {
+            // 顺序不能反：旧独占还占着设备时共享流打不开（0x8889000A），
+            // 必须先等会话退出、设备交还系统，再建共享流。
+            self.output.write().stop();
             let pref = self.device_pref.read().clone();
             let (handle, sink) = Self::build_output_resilient(pref.as_deref())?;
             let mut out = self.output.write();
-            // 先等独占会话真正退出、设备交还系统，再建共享流，否则无声
-            out.stop();
             *out = Output::Shared(sink);
             *self.out.write() = handle;
-            self.sync_exclusive_status();
+            let active = out.is_exclusive();
+            drop(out);
+            self.sync_exclusive_status(active);
         }
         let mut out = self.output.write();
         out.clear();
@@ -769,10 +796,13 @@ impl Engine {
 
     // ---------- 独占模式 ----------
 
-    /// 把"是否真的在跑独占"同步到共享状态，供设置页展示
-    fn sync_exclusive_status(&self) {
+    /// 把"是否真的在跑独占"同步到共享状态，供设置页展示。
+    ///
+    /// `active` 由调用方在**释放 output 锁之后**传入：本函数内部只写
+    /// exclusive_status，不再读 output。历史上它在持有 output 写锁时被
+    /// 调用、内部再取读锁，RwLock 写优先导致同一线程自死锁。
+    fn sync_exclusive_status(&self, active: bool) {
         let mut st = self.exclusive_status.write();
-        let active = self.output.read().is_exclusive();
         st.0 = active;
         if !active {
             st.1 = None;
