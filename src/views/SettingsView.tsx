@@ -322,11 +322,11 @@ export default function SettingsView() {
                   onClick={() => setCloseAction(o.key)}
                   className={`px-4 py-1.5 rounded-full text-[12px] transition-colors ${
                     closeAction === o.key
-                      ? "text-[var(--accent-strong)] font-medium"
+                      ? "text-[var(--ink)] font-medium"
                       : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
                   }`}
                   style={
-                    closeAction === o.key ? { background: "var(--accent-weak)" } : undefined
+                    closeAction === o.key ? { background: "var(--accent-soft)" } : undefined
                   }
                 >
                   {o.label}
@@ -356,12 +356,12 @@ export default function SettingsView() {
                   onClick={() => setTheme(t.key)}
                   className={`px-4 py-1.5 rounded-full text-[12px] transition-colors ${
                     theme === t.key
-                      ? "text-[var(--accent-strong)] font-medium"
+                      ? "text-[var(--ink)] font-medium"
                       : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
                   }`}
                   style={
                     theme === t.key
-                      ? { background: "var(--accent-weak)" }
+                      ? { background: "var(--accent-soft)" }
                       : undefined
                   }
                 >
@@ -423,10 +423,10 @@ export default function SettingsView() {
             <button
               className={`px-4 py-1.5 rounded-full text-[12px] transition-colors ${
                 desktopLyricsOn
-                  ? "text-[var(--accent-strong)] font-medium"
+                  ? "text-[var(--ink)] font-medium"
                   : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
               }`}
-              style={desktopLyricsOn ? { background: "var(--accent-weak)" } : undefined}
+              style={desktopLyricsOn ? { background: "var(--accent-soft)" } : undefined}
               onClick={() =>
                 desktopLyricsOn
                   ? desktopLyricsLock
@@ -604,7 +604,7 @@ export default function SettingsView() {
                   onClick={() => setQuality(q.key)}
                   className={`px-3 py-1.5 rounded-full text-[12px] transition-colors ${
                     quality === q.key
-                      ? "bg-[var(--accent-weak)] text-[var(--accent-strong)] font-medium"
+                      ? "bg-[var(--accent-soft)] text-[var(--ink)] font-medium"
                       : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
                   }`}
                 >
@@ -776,7 +776,7 @@ export default function SettingsView() {
                   onClick={() => setCacheLimit(o.bytes)}
                   className={`px-3 py-1.5 rounded-full text-[12px] transition-colors ${
                     cacheLimit === o.bytes
-                      ? "bg-[var(--accent-weak)] text-[var(--accent-strong)] font-medium"
+                      ? "bg-[var(--accent-soft)] text-[var(--ink)] font-medium"
                       : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
                   }`}
                 >
@@ -1176,7 +1176,7 @@ function SourceManagerSection() {
                 <span
                   className={`shrink-0 text-[10.5px] px-1.5 py-0.5 rounded ${
                     s.kind === "script"
-                      ? "bg-[var(--accent-weak)] text-[var(--accent-strong)]"
+                      ? "bg-[var(--accent-soft)] text-[var(--ink)]"
                       : "bg-[var(--shade-strong)] text-[var(--ink-2)]"
                   }`}
                 >

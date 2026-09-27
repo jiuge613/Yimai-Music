@@ -33,22 +33,27 @@ export default function RankingView() {
   const setView = useStore((s) => s.setView);
   const toggleLikeOnline = useStore((s) => s.toggleLikeOnline);
   const savedOnline = useStore((s) => s.savedOnline);
+  // 搜索结果跨模块保留：切走再回来不丢（store 里网易云/QQ/酷狗都是这么做的）
+  const rankingSearch = useStore((s) => s.rankingSearch);
+  const setRankingSearch = useStore((s) => s.setRankingSearch);
 
   const [sources, setSources] = useState<LxSourceItem[]>([]);
   const [sourceId, setSourceId] = useState<number>(0); // 0 = 自动（第一个启用的音源）
   const [platform, setPlatform] = useState(""); // "" = 自动
 
-  const [kw, setKw] = useState("");
-  const [query, setQuery] = useState("");
+  const [kw, setKw] = useState(rankingSearch?.kw ?? "");
+  const [query, setQuery] = useState(rankingSearch?.kw ?? "");
   const [loading, setLoading] = useState(false);
-  const [searched, setSearched] = useState(false);
+  const [searched, setSearched] = useState(rankingSearch?.searched ?? false);
   const [emptyKw, setEmptyKw] = useState(false);
   const [error, setError] = useState("");
-  const [songs, setSongs] = useState<LxSearchSong[]>([]);
-  const [via, setVia] = useState("");
-  const [sourceError, setSourceError] = useState("");
-  const [resultPlatform, setResultPlatform] = useState("");
-  const [resultSourceId, setResultSourceId] = useState<number | null>(null);
+  const [songs, setSongs] = useState<LxSearchSong[]>(rankingSearch?.songs ?? []);
+  const [via, setVia] = useState(rankingSearch?.via ?? "");
+  const [sourceError, setSourceError] = useState(rankingSearch?.sourceError ?? "");
+  const [resultPlatform, setResultPlatform] = useState(rankingSearch?.resultPlatform ?? "");
+  const [resultSourceId, setResultSourceId] = useState<number | null>(
+    rankingSearch?.resultSourceId ?? null,
+  );
   const [playingId, setPlayingId] = useState<string>("");
 
   // 已启用的音源（排行榜的搜索与取链都依赖它；没有也能用内置平台兜底）
@@ -83,6 +88,7 @@ export default function RankingView() {
         setSongs([]);
         setError("");
         setSearched(false);
+        setRankingSearch(null);
         return;
       }
       setEmptyKw(false);
@@ -103,14 +109,33 @@ export default function RankingView() {
         setSourceError(r.sourceError ?? "");
         setResultPlatform(r.platform ?? "");
         setResultSourceId(r.sourceId ?? null);
+        // 写回 store：切到其它模块再回来时恢复同一份结果
+        setRankingSearch({
+          kw: text,
+          songs: r.songs ?? [],
+          via: r.via ?? "",
+          sourceError: r.sourceError ?? "",
+          resultPlatform: r.platform ?? "",
+          resultSourceId: r.sourceId ?? null,
+          searched: true,
+        });
       } catch (e) {
         setSongs([]);
         setError(String(e));
+        setRankingSearch({
+          kw: text,
+          songs: [],
+          via: "",
+          sourceError: "",
+          resultPlatform: "",
+          resultSourceId: null,
+          searched: true,
+        });
       } finally {
         setLoading(false);
       }
     },
-    [kw, platform, sourceId]
+    [kw, platform, sourceId, setRankingSearch]
   );
 
   const playSong = useCallback(

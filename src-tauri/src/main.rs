@@ -256,7 +256,10 @@ fn device_watcher(app: AppHandle) {
             .unwrap_or_default();
         let name_changed = now_default != last_default && !now_default.is_empty();
         let due = retry_at.map(|t| std::time::Instant::now() >= t).unwrap_or(false);
-        if !name_changed && !due {
+        // 播放路径的设备打开失败也会置位 device_broken：立即纳入恢复循环，
+        // 不必等设备名变化（设备名不变时驱动一样可能无响应）。
+        let broken = eng.device_broken();
+        if !name_changed && !due && !broken {
             continue;
         }
         if name_changed {

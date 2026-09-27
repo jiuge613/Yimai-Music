@@ -181,10 +181,22 @@ impl Output {
             }
         }
     }
-    /// 音量/倍速对独占无效：会话线程直接读引擎共享的原子量，
-    /// 写入动作已在 Engine::set_volume / set_speed 里完成。
-    fn set_volume(&mut self, _v: f32) {}
-    fn set_speed(&mut self, _v: f32) {}
+    /// 音量/倍速：共享模式直接作用于 rodio Sink；独占模式由会话线程
+    /// 每缓冲块读取引擎共享的原子量（写入动作已在 Engine::set_volume /
+    /// set_speed 完成，这里无需再做）。
+    ///
+    /// 注意：这里**必须**对 Shared 分支生效。历史上整段是空实现，只考虑
+    /// 了独占，导致共享模式下音量/静音/倍速全部无效、声音永远 100%。
+    fn set_volume(&mut self, v: f32) {
+        if let Output::Shared(s) = self {
+            s.set_volume(v);
+        }
+    }
+    fn set_speed(&mut self, v: f32) {
+        if let Output::Shared(s) = self {
+            s.set_speed(v);
+        }
+    }
     /// 独占会话不支持原地定位（源已被线程消费），返回错误让引擎走重建路径。
     fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
         match self {
@@ -272,6 +284,9 @@ pub struct Engine {
     smtc: Sender<SmtcMsg>,
     /// 用户指定的输出设备名（None = 跟随系统默认，设备热插拔时自动切换）
     device_pref: RwLock<Option<String>>,
+    /// 输出设备处于故障状态（打开失败/驱动无响应）。置位后由
+    /// device_watcher 每 2 秒尝试恢复，恢复成功才清除。
+    device_broken: AtomicBool,
 }
 
 impl Engine {
@@ -327,13 +342,43 @@ impl Engine {
             cache_limit: AtomicU64::new(cache_limit),
             smtc,
             device_pref: RwLock::new(None),
+            device_broken: AtomicBool::new(false),
         })
     }
 
     /// 按设备偏好创建输出流与 Sink；None = 系统默认设备。
     /// cpal Stream 非 Send/Sync：泄漏保活整个进程周期（与旧实现一致），
     /// 设备切换时旧 stream 一起泄漏（仅结构体大小，代价可忽略）。
+    ///
+    /// WASAPI 的设备打开调用（IAudioClient::Initialize / GetMixFormat 等）
+    /// **没有内部超时**：声卡驱动无响应时调用会无限阻塞。若直接跑在
+    /// async 命令线程上，整个命令永久挂起 —— 用户侧表现为"开关独占后
+    /// 界面点了没反应"（v1.1.4 复现：关闭独占后 30 秒不返回）。
+    /// 因此把真正的打开动作放到独立线程，5 秒没返回即报超时。
+    /// 线程若真卡死在驱动调用里无法回收——泄漏一个线程换取应用不冻结，
+    /// 这是代价最小的取舍。
     fn build_output(
+        pref: Option<&str>,
+    ) -> Result<(&'static OutputStreamHandle, Sink), String> {
+        const OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+        let pref = pref.map(|s| s.to_string());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("audio-open".into())
+            .spawn(move || {
+                let _ = tx.send(Self::build_output_inner(pref.as_deref()));
+            })
+            .map_err(|e| format!("启动音频设备打开线程失败: {e}"))?;
+        match rx.recv_timeout(OPEN_TIMEOUT) {
+            Ok(Ok(v)) => Ok(v),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err("打开输出设备超时：声卡驱动无响应（可尝试重启应用或切换输出设备）".into()),
+        }
+    }
+
+    /// build_output 的实际动作：枚举设备并创建输出流（跑在独立线程上，
+    /// 见 build_output 的注释）。返回前不泄漏任何句柄。
+    fn build_output_inner(
         pref: Option<&str>,
     ) -> Result<(&'static OutputStreamHandle, Sink), String> {
         let host = rodio::cpal::default_host();
@@ -386,6 +431,11 @@ impl Engine {
                 }
                 Err(e) => {
                     crate::elog!("[engine] 打开输出设备失败(第{}次) pref={:?} err={e}", i + 1, pref);
+                    // 驱动无响应（超时）不是瞬时问题，重试只会再等一遍 5 秒
+                    // 超时；立即返回，交给 device_watcher 的自动恢复兜底。
+                    if e.contains("超时") {
+                        return Err(e);
+                    }
                     last_err = e;
                 }
             }
@@ -428,6 +478,7 @@ impl Engine {
         // 重建期间 monitor 会因后端短暂为空误判"播完"，借用 rebuilding 标志屏蔽
         self.rebuilding.store(true, Ordering::Relaxed);
         let result = (|| -> Result<(), String> {
+            crate::elog!("[engine] switch_output_device 开始 pref={name:?}");
             let info = self.current.read().clone();
             let pos = self.pos_ms.load(Ordering::Relaxed);
             let was_paused = self.user_paused.load(Ordering::Relaxed);
@@ -439,6 +490,7 @@ impl Engine {
             // 独占会话的源由线程独占持有，设备切换时不能"原地搬到新设备"，
             // 统一重建为共享后端并从当前进度续播（独占会在下次开播时重新建立）。
             let (handle, sink) = Self::build_output_resilient(name)?;
+            crate::elog!("[engine] switch_output_device 新输出流已建立");
             self.set_device_preference(name);
             {
                 let mut old = self.output.write();
@@ -487,7 +539,23 @@ impl Engine {
             Ok(())
         })();
         self.rebuilding.store(false, Ordering::Relaxed);
+        match &result {
+            Ok(()) => {
+                self.device_broken.store(false, Ordering::Relaxed);
+                crate::elog!("[engine] switch_output_device 完成 pref={name:?}");
+            }
+            Err(e) => {
+                // 置位自愈标志：device_watcher 会周期重试直到设备恢复
+                self.device_broken.store(true, Ordering::Relaxed);
+                crate::elog!("[engine] switch_output_device 失败 pref={name:?} err={e}");
+            }
+        }
         result
+    }
+
+    /// 输出设备是否处于故障状态（供 device_watcher 自动恢复）
+    pub fn device_broken(&self) -> bool {
+        self.device_broken.load(Ordering::Relaxed)
     }
 
     // ---------- 播放 ----------
@@ -563,6 +631,10 @@ impl Engine {
                 info.kind,
                 info.path
             );
+            // 设备类失败置位自愈标志，交由 device_watcher 周期重试恢复
+            if is_device_error(&e) {
+                self.device_broken.store(true, Ordering::Relaxed);
+            }
             // 失败时后端可能已被 stop/clear 成空，但 current 还指着上一首。
             // 不清掉的话界面会继续显示旧曲目、进度条照走，表现为"点了没反应"。
             // 发 playing=false 让前端把状态归位。
@@ -813,16 +885,21 @@ impl Engine {
     /// - 开启：记下意图，**下一首**生效（规格如此）
     /// - 关闭：立刻把设备交还系统，从当前进度切回普通模式
     pub fn set_exclusive(self: &Arc<Self>, enabled: bool) -> Result<(), String> {
+        crate::elog!("[engine] set_exclusive({enabled}) 请求");
         let was = self.exclusive_requested.swap(enabled, Ordering::SeqCst);
         if was == enabled {
+            crate::elog!("[engine] set_exclusive({enabled}) 状态未变，跳过");
             return Ok(());
         }
         if enabled {
             *self.exclusive_status.write() = (false, None);
+            crate::elog!("[engine] set_exclusive(true) 已登记意图，下一首生效");
             return Ok(());
         }
         // 关闭：立即重建为共享后端（会把设备交还系统，其它应用音频恢复）
-        self.switch_output_device(self.device_pref.read().as_deref())
+        let r = self.switch_output_device(self.device_pref.read().as_deref());
+        crate::elog!("[engine] set_exclusive(false) 结果: {r:?}");
+        r
     }
 
     pub fn exclusive_requested(&self) -> bool {
@@ -858,7 +935,6 @@ impl Engine {
         self.volume.store(v.to_bits(), Ordering::Relaxed);
         self.output.write().set_volume(v);
     }
-
     pub fn volume(&self) -> f32 {
         f32::from_bits(self.volume.load(Ordering::Relaxed))
     }
@@ -1084,6 +1160,44 @@ impl Engine {
                     }
                 }
                 Ok(()) => {
+                    // 下载成功：登记到下载管理（已下载列表）。
+                    // 播放触发的缓存下载同样可见，任务 id 用缓存键保证幂等。
+                    // 失败时不登记：重试成功后再出现。
+                    {
+                        let st = app.state::<crate::AppState>();
+                        let conn = st.db.lock();
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs() as i64)
+                            .unwrap_or(0);
+                        let size = cache.metadata().map(|m| m.len() as i64).unwrap_or(0);
+                        let song_id = info
+                            .kgid
+                            .clone()
+                            .or_else(|| info.nid.map(|v| v.to_string()))
+                            .or_else(|| info.qid.clone())
+                            .unwrap_or_default();
+                        crate::db::upsert_download_task(
+                            &conn,
+                            &crate::db::DownloadTask {
+                                id: format!("cache:{key}"),
+                                kind: info.kind.clone(),
+                                song_id,
+                                media_mid: String::new(),
+                                title: info.title.clone(),
+                                artist: info.artist.clone(),
+                                album: info.album.clone(),
+                                cover: info.cover.clone(),
+                                size,
+                                received: size,
+                                status: "done".into(),
+                                error: String::new(),
+                                file_path: cache.to_string_lossy().into_owned(),
+                                created_at: now,
+                                finished_at: now,
+                            },
+                        );
+                    }
                     // 仅当该地址仍是用户最新意图时才自动开播。
                     // 判定用"是否队首"而不是"是否存在"：点 A 再点 B 后，
                     // A 先下完时排在队尾，不该抢在 B 前面播。

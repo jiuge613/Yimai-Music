@@ -29,6 +29,7 @@ import type {
   QqSong,
   KgSong,
   LxQueueEntry,
+  LxSearchSong,
   Playlist,
   QueueItem,
   RepeatMode,
@@ -137,6 +138,26 @@ interface Store {
 
   /** LX（排行榜音源）在线曲目播放缓存：键 "sourceId:platform:songId" */
   lxCache: Record<string, LxQueueEntry>;
+
+  /** 排行榜搜索结果（跨模块保留：切走再回来不丢） */
+  rankingSearch: {
+    kw: string;
+    songs: LxSearchSong[];
+    via: string;
+    sourceError: string;
+    resultPlatform: string;
+    resultSourceId: number | null;
+    searched: boolean;
+  } | null;
+  setRankingSearch: (s: {
+    kw: string;
+    songs: LxSearchSong[];
+    via: string;
+    sourceError: string;
+    resultPlatform: string;
+    resultSourceId: number | null;
+    searched: boolean;
+  } | null) => void;
 
   quality: string;
   /** 关闭主窗口行为：tray = 最小化到托盘（默认）；exit = 直接退出应用 */
@@ -630,6 +651,9 @@ export const useStore = create<Store>((set, get) => ({
   kugouCache: {},
 
   lxCache: {},
+
+  rankingSearch: null,
+  setRankingSearch: (s) => set({ rankingSearch: s }),
 
   quality: "high",
   closeAction: "tray",
