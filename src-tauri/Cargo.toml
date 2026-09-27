@@ -1,6 +1,6 @@
 [package]
 name = "yimai"
-version = "1.0.1"
+version = "1.0.2"
 description = "Yimai Music - 精美的高性能音乐播放器"
 authors = ["Yimai Music"]
 license = "Apache-2.0"
@@ -38,12 +38,12 @@ qrcode = { version = "0.14", default-features = false, features = ["image"] }
 filetime = "0.2"
 # WASAPI 独占输出（src/exclusive.rs，仅 Windows）。用 target 限定，
 # 让非 Windows 平台仍能编译这个 crate。
-# 独占输出用 wasapi_out.rs（移植自上游 RustMusic），锁定 0.14：
+# 独占输出用 wasapi_out.rs（移植自上游项目），锁定 0.14：
 # 该模块是照 wasapi 0.14 的 API 写的（0.24 改了 DeviceCollection/initialize_client
 # 等接口，原样编译不过）。
 wasapi = "0.14"
-# 上游 RustMusic 的 wasapi_out.rs 依赖它：与 windows 0.61 并存的第二份
-# windows-rs（0.51），用于匹配 wasapi 0.62 的 HRESULT/Error 签名。
+# wasapi_out.rs 依赖它：与 windows 0.61 并存的第二份 windows-rs（0.51），
+# 用于匹配 wasapi 0.14 的 HRESULT/Error 签名。
 windows51 = { package = "windows", version = "0.51", default-features = false }
 
 [target.'cfg(windows)'.dependencies]

@@ -617,7 +617,7 @@ mod tests {
     }
 
     /// 端到端验证（需要真实音频设备，默认忽略）：
-    /// cargo test --bin rustmusic exclusive_lifecycle_and_release -- --ignored --nocapture
+    /// cargo test --bin yimai exclusive_lifecycle_and_release -- --ignored --nocapture
     ///
     /// 1. 独占会话能在支持的设备上建立；
     /// 2. 停止 + 等待线程退出后设备立刻交还系统（共享流能重新打开，

@@ -42,7 +42,7 @@ jobs:
             $t = Get-Content -LiteralPath $f -Raw
             # 更新源与包名/可执行文件名里不能残留旧标识
             if ($f -match 'updater\.rs') {
-              if ($t -notmatch 'jiuge613/YimaiMusic') {
+              if ($t -notmatch 'jiuge613/Yimai-Music') {
                 Write-Error 'updater.rs 的 GITHUB_REPO 未指向本仓库，自动更新会失效'; exit 1
               }
             } elseif ($t -match '(?i)rustmusic') {

@@ -14,13 +14,10 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 /// GitHub 仓库（owner/name），自动更新从这里拉取最新 Release。
-/// 上游为 LingyunStudio/RustMusic（Apache-2.0），本仓库为完整品牌化后的二改版本。
-///
-/// 这里保持现存的仓库名而不是品牌名：仓库改名需要 Administration 权限，
-/// 且一旦代码先改名、仓库还没改，已发布版本的自动更新会直接 404。
-/// GitHub 对改名后的旧地址会做 301 重定向，所以仓库改名后本常量通常无需改动；
-/// 万一重定向不生效，只需改这一行。
-const GITHUB_REPO: &str = "jiuge613/YimaiMusic";
+/// 上游为 Apache-2.0 项目，本仓库为完整品牌化后的二改版本。
+/// 仓库已更名为 Yimai-Music；GitHub 会对旧地址 301 重定向，
+/// 万一重定向在个别网络下失效，只需改这一行。
+const GITHUB_REPO: &str = "jiuge613/Yimai-Music";
 const UA: &str = "YimaiMusic-Updater";
 /// 单个下载来源的连接/传输超时：安装包 10~20 MB，弱网 180s 足够；
 /// 某来源卡死/无响应时在该超时后快速切换下一个候选源，避免整体挂起。

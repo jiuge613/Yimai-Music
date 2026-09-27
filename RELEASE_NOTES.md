@@ -1,15 +1,16 @@
-# Yimai Music v1.0.1
+# Yimai Music v1.0.2
 
-## 本次更新：全面品牌化
+## 本次更新：移植上游两项能力
 
-项目已从头到尾统一为 **Yimai Music** 品牌。
+- **歌手 / 专辑详情页**：本地曲库匹配 + 网易云 / QQ / 酷狗在线搜索结果聚合；行内点击歌手或专辑可继续下钻，详情页自带返回栈（标题栏返回键、详情页内返回按钮、Alt + ← 都能逐层回退）。
+- **独占输出改用上游 `wasapi_out.rs`**：会话模型，初始化失败自动回退普通模式；并保留「等待独占会话真正退出后再建共享流」的处理，避免关闭独占后无声。
+- 独占的初始化与退出等待全部加了硬上限（6 秒 / 1.5 秒）：驱动无响应时自动放弃独占并回退，不再卡住播放。
 
-- **安装包产物更名** `YimaiMusic_<版本>_x64-setup.exe`（旧版为 `Yimai_...`）。
-- 窗口标题、系统托盘、Windows 媒体浮窗、启动页、侧栏品牌区、设置页关于区、HTTP 请求 User-Agent 全部统一为 Yimai Music。
-- 发行版标题改为 "Yimai Music vX.Y.Z"，与正文一致。
-- README 移除上游作者托管在 LingyunStudio/LingyunImg 的界面图（非本项目资产），并补全 Apache-2.0 的上游与第三方声明。
+## v1.0.1 内容回顾
 
-> **仓库名说明**：GitHub 仓库名目前仍是 `jiuge613/YimaiMusic`——重命名需要 Administration 权限令牌，本次未能完成。GitHub 对改名后的旧地址会 301 重定向，因此**改名后自动更新无需改代码**；若重定向未生效，只需改 `src-tauri/src/updater.rs` 的 `GITHUB_REPO` 一行。
+全面品牌化：安装包更名 `YimaiMusic_<版本>_x64-setup.exe`、HTTP User-Agent 统一、发行版标题与正文一致、README 补全 Apache-2.0 上游与第三方声明。
+
+> **仓库名说明**：GitHub 仓库已更名为 `jiuge613/Yimai-Music`。旧地址会 301 重定向，自动更新不受影响；若个别网络下重定向失效，只需改 `src-tauri/src/updater.rs` 的 `GITHUB_REPO` 一行。
 
 ### 授权
 
