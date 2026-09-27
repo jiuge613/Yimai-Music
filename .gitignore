@@ -23,6 +23,8 @@ Thumbs.db
 desktop.ini
 
 # Scratch & debug dumps（根目录下划线开头的临时文件 / 参考资料目录）
+# 注意：发版时不要把 .git 搬进子目录。曾因 _release_repo\.git 导致主目录
+# 失去版本控制、git 命令全部报 "not a git repository"。
 /_*
 src-tauri/_*.rs
 
