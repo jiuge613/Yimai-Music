@@ -14,10 +14,14 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 /// GitHub 仓库（owner/name），自动更新从这里拉取最新 Release。
-/// 已指向本项目自己的仓库：jiuge613/YimaiMusic（上游为 LingyunStudio/RustMusic）。
-/// 若日后改名/迁移仓库，同步修改此处即可。
+/// 上游为 LingyunStudio/RustMusic（Apache-2.0），本仓库为完整品牌化后的二改版本。
+///
+/// 这里保持现存的仓库名而不是品牌名：仓库改名需要 Administration 权限，
+/// 且一旦代码先改名、仓库还没改，已发布版本的自动更新会直接 404。
+/// GitHub 对改名后的旧地址会做 301 重定向，所以仓库改名后本常量通常无需改动；
+/// 万一重定向不生效，只需改这一行。
 const GITHUB_REPO: &str = "jiuge613/YimaiMusic";
-const UA: &str = "Yimai-Updater";
+const UA: &str = "YimaiMusic-Updater";
 /// 单个下载来源的连接/传输超时：安装包 10~20 MB，弱网 180s 足够；
 /// 某来源卡死/无响应时在该超时后快速切换下一个候选源，避免整体挂起。
 const SOURCE_TIMEOUT: Duration = Duration::from_secs(180);
@@ -264,7 +268,7 @@ fn download_from_one(
 /// 切换来源时从头重新计数）。若全部来源均失败，返回最后一次的错误。
 pub fn download(app: &AppHandle, url: &str, name: &str, expected_size: u64) -> Result<PathBuf, String> {
     DOWNLOAD_CANCEL.store(false, Ordering::Relaxed);
-    // 附件名固定为 Yimai_*-setup.exe，仅允许常规文件名字符，避免拼进脚本出问题
+    // 附件名固定为 YimaiMusic_*-setup.exe，仅允许常规文件名字符，避免拼进脚本出问题
     let safe_name: String = name
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '(' | ')'))
@@ -305,7 +309,7 @@ fn build_update_script(setup: &str, dir: &str, exe: &str) -> String {
     let stem = Path::new(setup)
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("yimai-setup");
+        .unwrap_or("yimai-music-setup");
     let stem_q = ps_quote(stem);
 
     format!(
@@ -343,7 +347,7 @@ pub fn install_and_restart(app: &AppHandle, setup: &Path) -> Result<(), String> 
         &exe.to_string_lossy(),
     );
 
-    let script_path = std::env::temp_dir().join(format!("yimai-update-{}.ps1", std::process::id()));
+    let script_path = std::env::temp_dir().join(format!("yimai-music-update-{}.ps1", std::process::id()));
     std::fs::write(&script_path, format!("\u{feff}{script}"))
         .map_err(|e| format!("写入更新脚本失败：{e}"))?;
 
@@ -413,17 +417,17 @@ mod tests {
 
     #[test]
     fn script_quotes_paths_with_spaces_and_chinese() {        let s = build_update_script(
-            r"C:\Users\张三\AppData\Local\Temp\Yimai_0.1.2.0_x64-setup.exe",
-            r"C:\Program Files\Yimai",
-            r"C:\Program Files\Yimai\yimai.exe",
+            r"C:\Users\张三\AppData\Local\Temp\YimaiMusic_0.1.2.0_x64-setup.exe",
+            r"C:\Program Files\Yimai Music",
+            r"C:\Program Files\Yimai Music\yimai.exe",
         );
         // 落盘供 PowerShell 解析器做语法校验（UTF-8 BOM，与真实写入一致）
-        let dump = std::env::temp_dir().join("yimai-update-script-test.ps1");
+        let dump = std::env::temp_dir().join("yimai-music-update-script-test.ps1");
         std::fs::write(&dump, format!("\u{feff}{s}")).unwrap();
-        assert!(s.contains(r"'C:\Users\张三\AppData\Local\Temp\Yimai_0.1.2.0_x64-setup.exe'"));
+        assert!(s.contains(r"'C:\Users\张三\AppData\Local\Temp\YimaiMusic_0.1.2.0_x64-setup.exe'"));
         assert!(s.contains(r#"('/DIR="' + $dir + '"')"#));
-        assert!(s.contains("'C:\\Program Files\\Yimai'"));
-        assert!(s.contains("Get-Process -Name 'Yimai_0.1.2.0_x64-setup'"));
+        assert!(s.contains("'C:\\Program Files\\Yimai Music'"));
+        assert!(s.contains("Get-Process -Name 'YimaiMusic_0.1.2.0_x64-setup'"));
         // 单引号转义：路径里的 ' 必须 doubled，避免破坏 PS 字符串
         let q = build_update_script("C:\\it's\\setup.exe", "C:\\app", "C:\\app\\yimai.exe");
         assert!(q.contains("'C:\\it''s\\setup.exe'"));
@@ -433,8 +437,8 @@ mod tests {
     fn github_download_path_parses_release_url() {
         // 标准 browser_download_url
         assert_eq!(
-            github_download_path("https://github.com/jiuge613/YimaiMusic/releases/download/v0.1.11/Yimai_0.1.11.0_x64-setup.exe"),
-            Some("jiuge613/YimaiMusic/releases/download/v0.1.11/Yimai_0.1.11.0_x64-setup.exe".to_string())
+            github_download_path("https://github.com/jiuge613/YimaiMusic/releases/download/v0.1.11/YimaiMusic_0.1.11.0_x64-setup.exe"),
+            Some("jiuge613/YimaiMusic/releases/download/v0.1.11/YimaiMusic_0.1.11.0_x64-setup.exe".to_string())
         );
         // 带 query 也能剥掉
         assert_eq!(

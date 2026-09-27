@@ -1,7 +1,7 @@
 ﻿; Yimai Windows 安装包脚本（Inno Setup 6）
 ; 一键打包: powershell -ExecutionPolicy Bypass -File installer\build.ps1
 ;          （等价于: npm run tauri build → 本脚本编译）
-; 输出: installer\output\Yimai_<版本>_x64-setup.exe
+; 输出: installer\output\YimaiMusic_<版本>_x64-setup.exe
 
 #define MyAppName "Yimai Music"
 #define MyAppExeName "yimai.exe"
@@ -17,7 +17,7 @@ AppPublisher={#MyAppName}
 DefaultDirName={autopf}\{#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=output
-OutputBaseFilename=Yimai_{#MyAppVersion}_x64-setup
+OutputBaseFilename=YimaiMusic_{#MyAppVersion}_x64-setup
 SetupIconFile=..\src-tauri\icons\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max

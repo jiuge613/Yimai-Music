@@ -2,9 +2,11 @@
 
 一款用 **Rust + Tauri 2 + React** 打造的高性能、精美界面的桌面音乐播放器。
 
-![tech](https://img.shields.io/badge/Rust-1.77+-DEA584) ![tech](https://img.shields.io/badge/Tauri-2-24C8D8) ![tech](https://img.shields.io/badge/React-18-61DAFB) ![platform](https://img.shields.io/badge/platform-Windows-blue)
+![tech](https://img.shields.io/badge/Rust-1.77+-DEA584) ![tech](https://img.shields.io/badge/Tauri-2-24C8D8) ![tech](https://img.shields.io/badge/React-18-61DAFB) ![platform](https://img.shields.io/badge/platform-Windows-blue) ![license](https://img.shields.io/badge/license-Apache--2.0-D22128)
 
-<img src="https://cdn.jsdelivr.net/gh/LingyunStudio/LingyunImg@master/2026/09/upgit_20260922_1790079638.png" alt="image-20260922202036015" style="zoom: 67%;" />
+<!-- 截图占位：请把本项目自己的界面截图放在 docs/screenshot.png 后改为
+     <img src="docs/screenshot.png" ... />。此处原为上游作者托管在
+     LingyunStudio/LingyunImg 的图片，非本项目资产，已移除。 -->
 
 ## ✨ 功能特性
 
@@ -99,10 +101,24 @@ npm run tauri build  # 构建发布版可执行文件（前端资源内嵌进 ex
 - [ ] 音频转码 / 标签批量编辑
 - [ ] macOS / Linux 构建
 
-## 📄 许可证
+## 📄 许可证与致谢
 
-本项目基于 [Apache-2.0](LICENSE) 许可证发布。
+本项目基于 [Apache-2.0](LICENSE) 许可证发布，**允许修改与商业使用**。
+
+### 上游
+
+本项目是 [LingyunStudio/RustMusic](https://github.com/LingyunStudio/RustMusic)（**Apache-2.0**）
+的品牌化二改版本。依据 Apache-2.0 §4(b)/(c)，原始版权声明完整保留在
+`LICENSE` 中（`Copyright 2026 LingyunStudio (RustMusic)`），上游仓库无 NOTICE 文件需传递。
+本仓库的改动包括但不限于：品牌更名、功能扩展与缺陷修复。
+
+### 第三方代码
 
 其中 `src-tauri/src/qrc.rs`（QQ QRC 歌词解密）来自开源项目
 [navidrome-lyrics-plugin](https://github.com/J0R6IT0/navidrome-lyrics-plugin)（MIT），
 按 Apache-2.0 修改后并入，文件头部保留原始版权声明。
+
+### 第三方服务
+
+可选的 GD音乐台歌词兜底（默认关闭）由第三方提供，遵循其 CC BY-NC 4.0 条款，
+详见设置页与应用内声明。

@@ -185,6 +185,11 @@ impl Output {
     }
 }
 
+/// 独占模式在 `Engine::output.write()` 保护下被释放，
+/// 渲染线程此时可能正阻塞在设备驱动调用上（蓝牙耳机休眠、USB DAC 唤醒中）。
+/// 独占打开失败后进入这段时间的冷却，不再每首歌都重试一次。
+const EXCLUSIVE_RETRY_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(300);
+
 pub struct Engine {
     /// 当前输出流 handle（cpal Stream 非 Send，泄漏保活；设备切换时重建）
     out: RwLock<&'static OutputStreamHandle>,
@@ -194,6 +199,9 @@ pub struct Engine {
     exclusive_requested: AtomicBool,
     /// 独占模式的实际状态：是否真的在跑独占，以及不可用时的原因
     exclusive_status: RwLock<(bool, Option<String>)>,
+    /// 独占打开失败后的冷却截止时刻。设备不支持时若每首歌都重试，
+    /// 每次都要付出一次设备枚举 + 超时等待，播放会被反复拖住。
+    exclusive_retry_at: RwLock<Option<std::time::Instant>>,
     app: AppHandle,
     pub eq: Arc<EqShared>,
     pub pos_ms: Arc<AtomicU64>,
@@ -256,6 +264,7 @@ impl Engine {
             output: RwLock::new(Output::Shared(sink)),
             exclusive_requested: AtomicBool::new(false),
             exclusive_status: RwLock::new((false, None)),
+            exclusive_retry_at: RwLock::new(None),
             app,
             eq,
             pos_ms: Arc::new(AtomicU64::new(0)),
@@ -611,6 +620,14 @@ impl Engine {
         if want == self.output.read().is_exclusive() {
             return;
         }
+        // 独占失败后的冷却期内直接沿用共享模式，不重复付出设备枚举与等待
+        if want {
+            if let Some(until) = *self.exclusive_retry_at.read() {
+                if std::time::Instant::now() < until {
+                    return;
+                }
+            }
+        }
         let pref = self.device_pref.read().clone();
         if want {
             match crate::exclusive::ExclusiveSink::open(pref.as_deref(), src_rate) {
@@ -620,8 +637,11 @@ impl Engine {
                     *out = Output::Exclusive(ex);
                 }
                 Err(e) => {
-                    // 打不开独占：回退共享模式，原因交给界面提示
+                    // 打不开独占：回退共享模式，原因交给界面提示。
+                    // 同时进入冷却，避免不支持的设备把每首歌都卡一遍。
                     eprintln!("[engine] 独占模式不可用，已回退普通模式: {e}");
+                    *self.exclusive_retry_at.write() =
+                        Some(std::time::Instant::now() + EXCLUSIVE_RETRY_COOLDOWN);
                     let (handle, sink) = match Self::build_output(pref.as_deref()) {
                         Ok(v) => v,
                         Err(e2) => {
@@ -636,6 +656,7 @@ impl Engine {
                 }
             }
         } else {
+            *self.exclusive_retry_at.write() = None;
             let (handle, sink) = match Self::build_output(pref.as_deref()) {
                 Ok(v) => v,
                 Err(e) => {

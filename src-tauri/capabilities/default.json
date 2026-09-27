@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Yimai 主窗口能力",
+  "description": "Yimai Music 主窗口能力",
   "windows": ["main", "desktop-lyrics"],
   "permissions": [
     "core:default",

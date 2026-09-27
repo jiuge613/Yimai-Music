@@ -14,8 +14,13 @@
 //! 把原因透给界面。
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::Duration;
+
+/// 打开独占输出的最长等待。超过即判定设备/驱动无响应并放弃独占。
+/// 这条上限同时保护 Tauri 异步运行时的工作线程不被独占初始化永久占住。
+const OPEN_TIMEOUT: Duration = Duration::from_secs(6);
 
 use parking_lot::Mutex;
 use rodio::Source;
@@ -163,16 +168,19 @@ impl ExclusiveSink {
 impl Drop for ExclusiveSink {
     fn drop(&mut self) {
         self.shared.shutdown.store(true, Ordering::SeqCst);
-        // 释放源持有的锁，渲染线程才能从 src.lock() 里退出来
+        self.shared.eof.store(true, Ordering::SeqCst);
+        self.shared.playing.store(false, Ordering::SeqCst);
+        // 释放源，渲染线程下一轮就能看到 src 为空并自行退出
         {
             let mut guard = self.shared.src.lock();
             *guard = None;
         }
-        self.shared.eof.store(true, Ordering::SeqCst);
-        self.shared.playing.store(false, Ordering::SeqCst);
-        if let Some(h) = self.handle.take() {
-            let _ = h.join();
-        }
+        // 不 join：渲染线程可能正卡在 write_to_device 等驱动调用上，
+        // join 会把调用方（且常常正持有 Engine 的 output 写锁）一起锁死，
+        // 表现为"点播放后整个界面无响应"。
+        // 线程只持有自己的 COM 对象与 Arc<Shared>，放手让它自行退出是安全的；
+        // shutdown 标志保证它不会在下一轮继续取数据。
+        self.handle.take();
     }
 }
 
@@ -357,7 +365,12 @@ fn render_thread_open(
         })
         .map_err(|e| ExclusiveUnsupported::Init(format!("无法创建渲染线程: {e}")))?;
 
-    match init_rx.recv() {
+    // 必须有超时：这里跑在 Tauri 异步运行时的工作线程上（play_track 是 async 命令，
+    // 会内联调用到 engine.start()）。渲染线程里的每一步 COM 调用
+    // （initialize_mta / 枚举设备 / initialize_client / start_stream）都可能因驱动
+    // 不佳而无限期阻塞（蓝牙耳机休眠、USB DAC 唤醒中等），无超时 recv 会把整个
+    // 运行时工作线程钉死，表现为"点播放后主界面无响应、也没有声音"。
+    match init_rx.recv_timeout(OPEN_TIMEOUT) {
         Ok(Ok((rate, name))) => Ok(ExclusiveSink {
             shared,
             handle: Some(handle),
@@ -369,10 +382,31 @@ fn render_thread_open(
             let _ = handle.join();
             Err(e)
         }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            // 线程卡在驱动调用里：不 join（会一起卡死），直接放弃独占
+            handle.detach_ok();
+            shared.shutdown.store(true, Ordering::SeqCst);
+            Err(ExclusiveUnsupported::Init(format!(
+                "设备初始化超时（{} 秒无响应），已放弃独占模式",
+                OPEN_TIMEOUT.as_secs()
+            )))
+        }
         Err(_) => {
             let _ = handle.join();
-            Err(ExclusiveUnsupported::Init("渲染线程无响应".into()))
+            Err(ExclusiveUnsupported::Init("渲染线程意外退出".into()))
         }
+    }
+}
+
+/// `JoinHandle::detach` 是 1.61+ 的稳定 API，但在部分旧工具链上不可用；
+/// 这里用一层封装，保持语义显式：放弃等待该线程。
+trait DetachOk {
+    fn detach_ok(self);
+}
+impl DetachOk for std::thread::JoinHandle<()> {
+    fn detach_ok(self) {
+        // std 的 JoinHandle 在 drop 时本就只是分离，不会阻塞调用方
+        drop(self);
     }
 }
 

@@ -3,7 +3,7 @@
 //! 设计取舍：**不内嵌 JS 运行时**。业界（lx-music-desktop）的音源脚本跑在
 //! 沙箱里、通过 `globalThis.lx` 与宿主交互；其中占绝大多数的是「HTTP 接口
 //! 型」脚本——脚本本身只做"拼 query 参数 → GET 接口 → 从 JSON 里取直链"，
-//! 不含加密运算。对这类脚本，Yimai 在导入时**静态解析出契约**
+//! 不含加密运算。对这类脚本，Yimai Music 在导入时**静态解析出契约**
 //! （API_BASE、平台/音质声明），播放取链由本模块用 ureq 原生完成，效果与
 //! 执行脚本一致而无需沙箱。
 //!
@@ -30,7 +30,7 @@ use crate::models::{LxPlatform, LxSearchSong};
 const TIMEOUT_CONNECT: Duration = Duration::from_secs(10);
 const TIMEOUT_READ: Duration = Duration::from_secs(15);
 
-const UA: &str = "Yimai/0.1 (LX-compatible source client)";
+const UA: &str = "YimaiMusic/1.0 (LX-compatible source client)";
 
 /// 已知平台代码 → 中文名（脚本/platforms.php 未提供名字时兜底）
 const PLATFORM_NAMES: &[(&str, &str)] = &[

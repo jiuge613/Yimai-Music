@@ -1,4 +1,23 @@
-# Yimai Music v1.0.0
+# Yimai Music v1.0.1
+
+## 本次更新：全面品牌化
+
+项目已从头到尾统一为 **Yimai Music** 品牌。
+
+- **安装包产物更名** `YimaiMusic_<版本>_x64-setup.exe`（旧版为 `Yimai_...`）。
+- 窗口标题、系统托盘、Windows 媒体浮窗、启动页、侧栏品牌区、设置页关于区、HTTP 请求 User-Agent 全部统一为 Yimai Music。
+- 发行版标题改为 "Yimai Music vX.Y.Z"，与正文一致。
+- README 移除上游作者托管在 LingyunStudio/LingyunImg 的界面图（非本项目资产），并补全 Apache-2.0 的上游与第三方声明。
+
+> **仓库名说明**：GitHub 仓库名目前仍是 `jiuge613/YimaiMusic`——重命名需要 Administration 权限令牌，本次未能完成。GitHub 对改名后的旧地址会 301 重定向，因此**改名后自动更新无需改代码**；若重定向未生效，只需改 `src-tauri/src/updater.rs` 的 `GITHUB_REPO` 一行。
+
+### 授权
+
+上游为 [LingyunStudio/RustMusic](https://github.com/LingyunStudio/RustMusic)，**Apache-2.0** 许可，允许修改与商业使用。本项目为完整品牌化后的二改版本，原始版权声明保留在 `LICENSE` 中（Apache-2.0 §4 要求）。
+
+> 说明：`identifier`（`com.yimai.app`）、`localStorage` 键前缀（`yimai.*`）与可执行文件名（`yimai.exe`）保持不变——它们是技术标识符，改动会导致既有用户的曲库、登录态与个人设置全部丢失。
+
+## v1.0.0 内容回顾
 
 首个正式版本。高性能桌面音乐播放器（Rust + Tauri 2 + React）。
 
@@ -32,7 +51,7 @@
 
 ## 安装说明
 
-1. 下载下方 `Yimai_1.0.0.0_x64-setup.exe`。
+  1. 下载下方 `YimaiMusic_1.0.0.0_x64-setup.exe`。
 2. 双击运行完成安装（默认装到当前用户目录，可切换为所有用户）。
 3. 启动后可在「设置 → 关于与更新」验证自动更新链路。
 
