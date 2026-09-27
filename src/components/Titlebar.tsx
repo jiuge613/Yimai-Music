@@ -6,8 +6,10 @@ import { useStore } from "../store";
 export default function Titlebar() {
   const [maximized, setMaximized] = useState(false);
   const win = getCurrentWindow();
-  const canGoBack = useStore((s) => s.navHistory.length > 0);
-  const goBack = useStore((s) => s.goBack);
+  const canGoBack =
+    useStore((s) => s.navHistory.length > 0) ||
+    (useStore((s) => s.view) === "detail" && useStore((s) => s.detailStack.length) > 0);
+  const back = useStore((s) => s.back);
 
   useEffect(() => {
     let disposed = false;
@@ -38,7 +40,7 @@ export default function Titlebar() {
       {canGoBack && (
         <button
           className="titlebar-btn absolute top-0 left-0 w-9 h-9 z-[56] flex items-center justify-center text-[var(--ink-2)] hover:bg-[var(--shade)] hover:text-[var(--ink)] transition-colors"
-          onClick={() => goBack()}
+          onClick={() => back()}
           title="返回上一层（Alt + ←）"
         >
           <ChevronLeft size={16} />

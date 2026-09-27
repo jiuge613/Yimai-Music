@@ -15,6 +15,7 @@ import SourcesView from "./views/SourcesView";
 import SettingsView from "./views/SettingsView";
 import RankingView from "./views/RankingView";
 import OnlineLibraryView from "./views/NeteaseView";
+import ArtistAlbumView from "./views/ArtistAlbumView";
 import { coverSrc } from "./api";
 import { extractColor } from "./utils";
 import { skinImage, skinUri } from "./skins";
@@ -160,6 +161,7 @@ export default function App() {
   const ready = useStore((s) => s.ready);
   const view = useStore((s) => s.view);
   const viewParam = useStore((s) => s.viewParam);
+  const detailKind = useStore((s) => s.detailKind);
   const queueOpen = useStore((s) => s.queueOpen);
   const nowPlayingOpen = useStore((s) => s.nowPlayingOpen);
   const fullscreen = useStore((s) => s.fullscreen);
@@ -187,10 +189,10 @@ export default function App() {
       if (e.key === "Escape" && useStore.getState().fullscreen) {
         useStore.getState().toggleFullscreen(false);
       }
-      // Alt + ←：逐层返回上一页（与标题栏返回按钮同一条路径）
+      // Alt + ←：逐层返回（详情页栈优先，其次普通视图栈）
       if (e.altKey && e.key === "ArrowLeft") {
         e.preventDefault();
-        useStore.getState().goBack();
+        useStore.getState().back();
       }
     };
     window.addEventListener("keydown", handler);
@@ -269,6 +271,7 @@ export default function App() {
               {view === "liked" && <LibraryView mode="liked" />}
               {view === "recent" && <LibraryView mode="recent" />}
               {view === "playlist" && <PlaylistDetail id={viewParam} />}
+              {view === "detail" && <ArtistAlbumView kind={detailKind} />}
               {view === "sources" && <SourcesView />}
               {view === "ranking" && <RankingView />}
               {view === "netease" && <OnlineLibraryView source="netease" />}

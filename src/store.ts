@@ -80,6 +80,11 @@ interface Store {
   search: string;
   /** 返回栈：每次 setView 压入一层（含当时的搜索词），goBack 逐层弹出 */
   navHistory: NavEntry[];
+  /** 歌手/专辑详情页：当前页面的名字与类型 */
+  detailName: string;
+  detailKind: "artist" | "album";
+  /** 详情页返回栈（歌手→其专辑→该专辑的歌手…可多层） */
+  detailStack: { name: string; kind: "artist" | "album" }[];
   /** 在线曲库（网易云/QQ/酷狗）各自的搜索词。
    * 放 store 而非组件本地 state：视图切走会卸载组件，本地 state 会丢，
    * 返回时搜索词和结果列表就没了。 */
@@ -160,6 +165,12 @@ interface Store {
   setView(v: ViewName, param?: number): void;
   /** 逐层返回；栈空时返回 false */
   goBack(): boolean;
+  /** 统一返回：详情页栈优先，其次普通视图栈（标题栏返回键 / Alt+← 走这里） */
+  back(): void;
+  /** 打开歌手/专辑详情页（可从详情页内继续跳，形成多层） */
+  openDetailPage(field: "artist" | "album", text: string): void;
+  /** 详情页返回上一层；没有可返回的层时退回普通视图栈 */
+  popDetailPage(): void;
   setSearch(s: string): void;
   /** 在线曲库各平台的搜索词（跨视图保持，返回时可还原） */
   setOnlineKw(source: "netease" | "qq" | "kugou", kw: string): void;
@@ -544,6 +555,9 @@ export const useStore = create<Store>((set, get) => ({
   viewParam: 0,
   search: "",
   navHistory: [],
+  detailName: "",
+  detailKind: "artist",
+  detailStack: [],
   onlineKw: { netease: "", qq: "", kugou: "" },
   nowPlayingOpen: false,
   fullscreen: false,
@@ -2173,8 +2187,49 @@ export const useStore = create<Store>((set, get) => ({
     }
   },
 
-  async loadLyrics(trackId) {
-    get().loadLyricsByKey(`track-${trackId}`);
+  back() {
+    const s = get();
+    // 详情页是叠在普通视图栈之上的一层，先弹它
+    if (s.view === "detail" && s.detailStack.length > 0) {
+      s.popDetailPage();
+      return;
+    }
+    s.goBack();
+  },
+
+  openDetailPage(field, text) {
+    const name = text.trim();
+    // 空的歌手/专辑名（如"未知艺术家"）没有可查的内容，直接忽略
+    if (!name) return;
+    set((s) => ({
+      detailStack: [...s.detailStack, { name: s.detailName, kind: s.detailKind }],
+      detailName: name,
+      detailKind: field,
+      view: "detail",
+    }));
+  },
+
+  popDetailPage() {
+    const s = get();
+    if (s.detailStack.length === 0) {
+      // 详情页是直接进来的（例如从资料库直接进入），退回普通视图栈
+      s.goBack();
+      return;
+    }
+    const prev = s.detailStack[s.detailStack.length - 1];
+    // 栈底那一项的 name 为空，代表"回到列表页"而不是再进一层详情
+    if (!prev.name) {
+      set((st) => ({ detailStack: [], detailName: "", view: "library" }));
+      return;
+    }
+    set((st) => ({
+      detailStack: st.detailStack.slice(0, -1),
+      detailName: prev.name,
+      detailKind: prev.kind,
+    }));
+  },
+
+  async loadLyrics(trackId) {    get().loadLyricsByKey(`track-${trackId}`);
   },
 
   /** 读取 GD音乐台兜底源配置（启动与进设置页时调用） */

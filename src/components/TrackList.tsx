@@ -27,6 +27,9 @@ interface TrackListProps {
   )[];
   inCard?: boolean;
   emptyHint?: string;
+  /** 点击行内歌手/专辑名时回调（用于进入歌手/专辑详情页）。
+   *  不传则这两格不可点击，保持各列表原有行为。 */
+  onMetaClick?: (field: "artist" | "album", text: string) => void;
   emptyAction?: { label: string; onClick: () => void };
   /** 是否允许长按拖拽调序（仅手动排序视图开启；提交顺序由调用方持久化） */
   dragSortable?: boolean;
@@ -56,6 +59,7 @@ export default function TrackList({
   mergedRows,
   inCard,
   emptyHint,
+  onMetaClick,
   emptyAction,
   dragSortable,
   onDragReorder,
@@ -289,14 +293,40 @@ export default function TrackList({
               )}
             </div>
             <div className="text-[12px] text-[var(--ink-3)] truncate mt-1">
-              {trackArtist(t)}
+              {onMetaClick ? (
+                <button
+                  className="truncate max-w-full text-left hover:text-[var(--accent-strong)] hover:underline"
+                  title={`查看歌手：${trackArtist(t)}`}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    onMetaClick("artist", trackArtist(t));
+                  }}
+                >
+                  {trackArtist(t)}
+                </button>
+              ) : (
+                trackArtist(t)
+              )}
             </div>
           </div>
         </div>
 
         {/* 专辑 */}
         <div className="text-[12.5px] text-[var(--ink-3)] truncate">
-          {t.album || "未知专辑"}
+          {onMetaClick && t.album ? (
+            <button
+              className="truncate max-w-full text-left hover:text-[var(--accent-strong)] hover:underline"
+              title={`查看专辑：${t.album}`}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                onMetaClick("album", t.album);
+              }}
+            >
+              {t.album}
+            </button>
+          ) : (
+            t.album || "未知专辑"
+          )}
         </div>
 
         {/* 格式 / 时长（与表头同列，右对齐） */}
@@ -460,12 +490,46 @@ export default function TrackList({
               )}
             </div>
             <div className="text-[12px] text-[var(--ink-3)] truncate mt-1">
-              {e.artist || "未知艺术家"}
+              {e.artist ? (
+                onMetaClick ? (
+                  <button
+                    className="truncate max-w-full text-left hover:text-[var(--accent-strong)] hover:underline"
+                    title={`查看歌手：${e.artist}`}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      onMetaClick("artist", e.artist);
+                    }}
+                  >
+                    {e.artist}
+                  </button>
+                ) : (
+                  e.artist
+                )
+              ) : (
+                "未知艺术家"
+              )}
             </div>
           </div>
         </div>
         <div className="text-[12.5px] text-[var(--ink-3)] truncate">
-          {e.album || "未知专辑"}
+          {e.album ? (
+            onMetaClick ? (
+              <button
+                className="truncate max-w-full text-left hover:text-[var(--accent-strong)] hover:underline"
+                title={`查看专辑：${e.album}`}
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  onMetaClick("album", e.album);
+                }}
+              >
+                {e.album}
+              </button>
+            ) : (
+              e.album
+            )
+          ) : (
+            "未知专辑"
+          )}
         </div>
         <div className="flex items-center justify-end gap-3">
           <span className="text-[10.5px] px-2 py-[3px] rounded-md bg-[var(--shade)] text-[var(--ink-2)] font-semibold tracking-wider">

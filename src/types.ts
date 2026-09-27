@@ -255,7 +255,9 @@ export type ViewName =
   | "qq"
   | "kugou"
   | "settings"
-  | "playlist";
+  | "playlist"
+  /** 歌手 / 专辑详情页（由 openDetailPage 压栈进入，不出现在侧边栏） */
+  | "detail";
 
 export interface ScanState {
   active: boolean;

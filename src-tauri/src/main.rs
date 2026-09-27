@@ -4,7 +4,7 @@ mod commands;
 mod db;
 mod engine;
 mod eq;
-mod exclusive;
+mod wasapi_out;
 mod gdstudio;
 mod kugou;
 mod library;

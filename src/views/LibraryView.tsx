@@ -42,6 +42,7 @@ export default function LibraryView({ mode }: { mode: Mode }) {
   const rowKeyOf = useStore((s) => s.rowKeyOf);
   const saveManualOrder = useStore((s) => s.saveManualOrder);
   const loadManualOrder = useStore((s) => s.loadManualOrder);
+  const openDetailPage = useStore((s) => s.openDetailPage);
   // 默认排序“添加时间”（资料库=入库顺序；最近播放/我喜欢=列表时间，本地与在线归并）
   const [sortKey, setSortKey] = useState<SortKey>("added");
   const [dir, setDir] = useState<1 | -1>(-1);
@@ -439,6 +440,7 @@ export default function LibraryView({ mode }: { mode: Mode }) {
             mergedRows={mergedRows.length ? mergedRows : undefined}
             dragSortable={manualActive}
             onDragReorder={manualActive ? onDragReorder : undefined}
+            onMetaClick={openDetailPage}
             emptyHint={
               mode === "library"
                 ? "本地音乐库还是空的"

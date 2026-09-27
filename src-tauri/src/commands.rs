@@ -2706,18 +2706,64 @@ pub async fn get_exclusive(state: State<'_, AppState>) -> Result<serde_json::Val
 
 /// 试一下当前设备能不能开独占，不改变用户设置。
 /// 设置页用它提前告诉用户"这台设备支不支持"，免得开了才发现白开。
+///
+/// 独占会话必须有采样源，这里用 0.1 秒静音桩：会话成功建立后立即终止，
+/// 只为验证驱动是否允许独占与能否完成格式协商。
 #[tauri::command]
 pub async fn probe_exclusive(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    use std::sync::Arc;
     let eng = engine_clone(&state);
     let pref = eng.device_preference();
-    // 用 48k/24bit 试探即可判断设备是否允许独占
-    match crate::exclusive::ExclusiveSink::open(pref.as_deref(), 48000) {
-        Ok(ex) => {
-            let info = (ex.device_name().to_string(), ex.device_rate());
-            drop(ex);
-            Ok(json!({ "supported": true, "device": info.0, "rate": info.1, "reason": null }))
+    let params = crate::wasapi_out::ExclusiveParams {
+        device_pref: pref,
+        channels: 2,
+        src_rate: 48000,
+        volume_bits: Arc::new(std::sync::atomic::AtomicU32::new(0.0f32.to_bits())),
+        speed_bits: Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits())),
+    };
+    // 0.1s @48k 静音：让会话走完完整的设备初始化流程后即可判定驱动是否允许独占
+    struct Silence(usize);
+    impl Iterator for Silence {
+        type Item = f32;
+        fn next(&mut self) -> Option<f32> {
+            if self.0 == 0 {
+                return None;
+            }
+            self.0 -= 1;
+            Some(0.0)
         }
-        Err(e) => Ok(json!({ "supported": false, "device": null, "rate": null, "reason": e.to_string() })),
+    }
+    impl rodio::Source for Silence {
+        fn current_frame_len(&self) -> Option<usize> {
+            Some(1)
+        }
+        fn sample_rate(&self) -> u32 {
+            48000
+        }
+        fn channels(&self) -> u16 {
+            2
+        }
+        fn total_duration(&self) -> Option<std::time::Duration> {
+            None
+        }
+    }
+    let silence = Silence(4800);
+    match crate::wasapi_out::spawn_exclusive_session(silence, params) {
+        Ok((ctl, rx)) => {
+            // 阻塞调用挪出 async 运行时，且设上限，避免驱动无响应时卡住派发
+            let opened = tauri::async_runtime::spawn_blocking(move || {
+                rx.recv_timeout(std::time::Duration::from_secs(6))
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+            crate::wasapi_out::wait_session_exit(&ctl, 1500);
+            match opened {
+                Ok(Ok(())) => Ok(json!({ "supported": true, "device": null, "rate": null, "reason": null })),
+                Ok(Err(e)) => Ok(json!({ "supported": false, "device": null, "rate": null, "reason": e })),
+                Err(_) => Ok(json!({ "supported": false, "device": null, "rate": null, "reason": "设备初始化超时（6 秒无响应）" })),
+            }
+        }
+        Err(e) => Ok(json!({ "supported": false, "device": null, "rate": null, "reason": e })),
     }
 }
 

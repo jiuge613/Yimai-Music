@@ -119,71 +119,89 @@ impl Source for BoxedSrc {
 }
 
 /// 播放后端：共享模式（rodio/cpal，经系统混音器）或独占模式（WASAPI 直连声卡）。
-/// 两者接口刻意对齐，播放/暂停/定位/音量等逻辑不分叉。
+///
+/// 独占侧移植自上游 RustMusic 的 `wasapi_out.rs`，采用**会话模型**：由
+/// `spawn_exclusive_session` 派生的线程持有采样源，引擎这边只拿一个
+/// `ExclusiveCtl` 控制句柄（active/paused/stop/exited）。音量与倍速通过
+/// 与引擎共享的 `Arc<AtomicU32>` 传给会话，因此独占下也能实时调。
 enum Output {
     Shared(Sink),
-    Exclusive(crate::exclusive::ExclusiveSink),
+    Exclusive(crate::wasapi_out::ExclusiveCtl),
 }
 
 impl Output {
-    fn append(&mut self, src: BoxedSrc) {
+    /// 送入一首新曲目。独占侧会终止旧会话并以新源重启；
+    /// 初始化失败返回 Err，此时源已被会话线程取走，调用方需自行重建。
+    fn append(&mut self, src: BoxedSrc) -> Result<(), String> {
         match self {
-            Output::Shared(sink) => sink.append(src),
-            Output::Exclusive(ex) => ex.append(Box::new(src)),
+            Output::Shared(sink) => {
+                sink.append(src);
+                Ok(())
+            }
+            Output::Exclusive(_) => unreachable!("独占会话由 start_exclusive 启动，不走 append"),
         }
     }
     fn play(&mut self) {
         match self {
             Output::Shared(s) => s.play(),
-            Output::Exclusive(e) => e.play(),
+            Output::Exclusive(c) => c.paused.store(false, Ordering::Relaxed),
         }
     }
     fn pause(&mut self) {
         match self {
             Output::Shared(s) => s.pause(),
-            Output::Exclusive(e) => e.pause(),
+            Output::Exclusive(c) => c.paused.store(true, Ordering::Relaxed),
         }
     }
+    /// 终止播放。独占侧必须等待会话线程真正退出（设备交还系统），
+    /// 否则紧接着重建的共享流打不开，表现为"关独占后无声"。
     fn stop(&mut self) {
         match self {
             Output::Shared(s) => s.stop(),
-            Output::Exclusive(e) => e.stop(),
+            Output::Exclusive(c) => {
+                crate::wasapi_out::wait_session_exit(c, EXCLUSIVE_EXIT_TIMEOUT_MS);
+            }
         }
     }
     fn clear(&mut self) {
         match self {
             Output::Shared(s) => s.clear(),
-            Output::Exclusive(e) => e.clear(),
+            Output::Exclusive(c) => {
+                crate::wasapi_out::wait_session_exit(c, EXCLUSIVE_EXIT_TIMEOUT_MS);
+            }
         }
     }
     fn empty(&self) -> bool {
         match self {
             Output::Shared(s) => s.empty(),
-            Output::Exclusive(e) => e.empty(),
+            Output::Exclusive(c) => !c.active.load(Ordering::Relaxed),
         }
     }
-    fn set_volume(&mut self, v: f32) {
-        match self {
-            Output::Shared(s) => s.set_volume(v),
-            Output::Exclusive(e) => e.set_volume(v),
-        }
-    }
-    fn set_speed(&mut self, v: f32) {
-        match self {
-            Output::Shared(s) => s.set_speed(v),
-            Output::Exclusive(e) => e.set_speed(v),
-        }
-    }
+    /// 音量/倍速对独占无效：会话线程直接读引擎共享的原子量，
+    /// 写入动作已在 Engine::set_volume / set_speed 里完成。
+    fn set_volume(&mut self, _v: f32) {}
+    fn set_speed(&mut self, _v: f32) {}
+    /// 独占会话不支持原地定位（源已被线程消费），返回错误让引擎走重建路径。
     fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
         match self {
             Output::Shared(s) => s.try_seek(pos),
-            Output::Exclusive(e) => e.try_seek(pos),
+            Output::Exclusive(_) => Err(rodio::source::SeekError::Other(Box::new(
+                std::io::Error::other("独占模式不支持原地定位"),
+            ))),
         }
     }
     fn is_exclusive(&self) -> bool {
         matches!(self, Output::Exclusive(_))
     }
 }
+
+/// 等待独占会话线程退出的上限。设备被独占客户端占用期间新的共享流打不开，
+/// 所以重建共享后端前必须确认旧会话已真正释放设备。
+const EXCLUSIVE_EXIT_TIMEOUT_MS: u64 = 1500;
+
+/// 等待独占会话完成设备初始化的上限。这段等待发生在 async 命令的工作线程上，
+/// 驱动无响应时必须有硬上限，否则整个命令派发会被拖住（表现为界面无响应）。
+const EXCLUSIVE_OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6);
 
 /// 独占模式在 `Engine::output.write()` 保护下被释放，
 /// 渲染线程此时可能正阻塞在设备驱动调用上（蓝牙耳机休眠、USB DAC 唤醒中）。
@@ -213,8 +231,10 @@ pub struct Engine {
     /// start() 换曲瞬间（clear 与 append 之间）置位，避免 monitor 误判"播完"
     pub switching: Arc<AtomicBool>,
     pub current: Arc<RwLock<Option<TrackInfo>>>,
-    volume: AtomicU32,
-    speed: AtomicU32,
+    // 独占会话线程直接读这两个原子量（与引擎共享 Arc），所以独占模式下
+    // 音量与倍速同样能实时生效，无需重建会话。
+    volume: Arc<AtomicU32>,
+    speed: Arc<AtomicU32>,
     play_seq: AtomicU64,
     /// 用户当前仍在等待的在线地址，按请求先后从新到旧排列（队首=最新意图）。
     /// 不能只留一个槽：点 A（下载中）→点 B（下载中）→再点 A 时，
@@ -274,8 +294,8 @@ impl Engine {
             rebuilding: Arc::new(AtomicBool::new(false)),
             switching: Arc::new(AtomicBool::new(false)),
             current: Arc::new(RwLock::new(None)),
-            volume: AtomicU32::new(volume.to_bits()),
-            speed: AtomicU32::new(speed.to_bits()),
+            volume: Arc::new(AtomicU32::new(volume.to_bits())),
+            speed: Arc::new(AtomicU32::new(speed.to_bits())),
             play_seq: AtomicU64::new(0),
             want_url: Arc::new(RwLock::new(Vec::new())),
             downloading: RwLock::new(HashSet::new()),
@@ -346,31 +366,15 @@ impl Engine {
 
             self.set_device_preference(name);
 
-            // 重建后端：独占优先，不可用则共享
-            let want_exclusive = self.exclusive_requested.load(Ordering::Relaxed);
-            let src_rate = self.probe_source_rate(info.as_ref());
-            let rebuilt: (Output, Option<&'static OutputStreamHandle>) = if want_exclusive {
-                match crate::exclusive::ExclusiveSink::open(name, src_rate) {
-                    Ok(ex) => (Output::Exclusive(ex), None),
-                    Err(e) => {
-                        eprintln!("[engine] 独占模式不可用，已回退普通模式: {e}");
-                        let (handle, sink) = Self::build_output(name)?;
-                        (Output::Shared(sink), Some(handle))
-                    }
-                }
-            } else {
-                let (handle, sink) = Self::build_output(name)?;
-                (Output::Shared(sink), Some(handle))
-            };
-
+            // 独占会话的源由线程独占持有，设备切换时不能"原地搬到新设备"，
+            // 统一重建为共享后端并从当前进度续播（独占会在下次开播时重新建立）。
+            let (handle, sink) = Self::build_output(name)?;
             {
-                let (out, handle) = rebuilt;
                 let mut old = self.output.write();
+                // 先等独占会话真正退出、设备交还系统，再建共享流，否则无声
                 old.stop();
-                *old = out;
-                if let Some(h) = handle {
-                    *self.out.write() = h;
-                }
+                *old = Output::Shared(sink);
+                *self.out.write() = handle;
             }
             self.sync_exclusive_status();
 
@@ -392,7 +396,7 @@ impl Engine {
                             );
                             let mut out = self.output.write();
                             out.clear();
-                            out.append(BoxedSrc(Box::new(wrapped)));
+                            out.append(BoxedSrc(Box::new(wrapped)))?;
                             out.set_volume(volume);
                             out.set_speed(speed);
                             if was_paused {
@@ -438,36 +442,41 @@ impl Engine {
 
     pub fn play_file(&self, info: TrackInfo) -> Result<(), String> {
         self.want_clear();
-        let file = File::open(&info.path).map_err(|e| format!("打开文件失败: {e}"))?;
-        let src = Decoder::new(buffered_reader(file))
-            .map_err(|e| format!("无法解码该音频文件: {e}"))?
-            .convert_samples::<f32>();
-        self.start(src, info)
+        self.start(info.path.clone(), info, 0)
     }
 
-    fn start<S>(&self, src: S, info: TrackInfo) -> Result<(), String>
-    where
-        S: Source<Item = f32> + Send + 'static,
-    {
-        let wrapped = EqSource::new(src, self.eq.clone(), self.pos_ms.clone());
+    /// 开播一首歌。`skip_ms` 非 0 时从该位置起播（FLAC 重建 / 独占不支持原地定位）。
+    ///
+    /// 独占会话（wasapi_out）由线程接管采样源，初始化失败时源已不可用，
+    /// 因此这里保留 `path` 以便失败后重新解码一次再回退共享模式。
+    fn start(&self, path: String, info: TrackInfo, skip_ms: u64) -> Result<(), String> {
+        // 统一用 BoxedSrc 作为源类型：skip_duration 包装会改变具体类型，
+        // 而失败重建需要一个可多次调用的同签名闭包。
+        type AnySrc = EqSource<BoxedSrc>;
+        let build = || -> Result<AnySrc, String> {
+            let file = File::open(&path).map_err(|e| format!("打开文件失败: {e}"))?;
+            let dec = Decoder::new(buffered_reader(file))
+                .map_err(|e| format!("无法解码该音频文件: {e}"))?
+                .convert_samples::<f32>();
+            let inner: BoxedSrc = if skip_ms > 0 {
+                BoxedSrc(Box::new(dec.skip_duration(Duration::from_millis(skip_ms))))
+            } else {
+                BoxedSrc(Box::new(dec))
+            };
+            Ok(EqSource::new(inner, self.eq.clone(), self.pos_ms.clone()))
+        };
+        let wrapped = build()?;
         let diag_sr = wrapped.sample_rate();
         let diag_ch = wrapped.channels();
         let diag_dur = wrapped.total_duration();
-        self.pos_ms.store(0, Ordering::Relaxed);
+        self.pos_ms.store(skip_ms, Ordering::Relaxed);
         self.dur_ms
             .store(info.duration_ms, Ordering::Relaxed);
         // 换曲瞬间后端短暂为空，置位避免 monitor 采样到 empty 误判"播完"
         self.switching.store(true, Ordering::Relaxed);
-        self.ensure_backend(diag_sr);
-        {
-            let mut out = self.output.write();
-            out.clear();
-            out.append(BoxedSrc(Box::new(wrapped)));
-            out.set_volume(f32::from_bits(self.volume.load(Ordering::Relaxed)));
-            out.set_speed(f32::from_bits(self.speed.load(Ordering::Relaxed)));
-            out.play();
-        }
+        let result = self.start_backend(wrapped, build, diag_sr);
         self.switching.store(false, Ordering::Relaxed);
+        result?;
         self.user_paused.store(false, Ordering::Relaxed);
         self.stopped.store(false, Ordering::Relaxed);
         #[cfg(debug_assertions)]
@@ -483,6 +492,99 @@ impl Engine {
             PlayState { playing: true, info, seq },
         );
         Ok(())
+    }
+
+    /// 按当前后端意图开播：独占可用则走独占会话，否则共享模式。
+    /// 独占失败会回退共享并重建采样源（源已被会话线程取走）。
+    fn start_backend(
+        &self,
+        wrapped: EqSource<BoxedSrc>,
+        rebuild: impl Fn() -> Result<EqSource<BoxedSrc>, String>,
+        src_rate: u32,
+    ) -> Result<(), String> {
+        if self.exclusive_requested.load(Ordering::Relaxed) && !self.exclusive_in_cooldown() {
+            let pref = self.device_pref.read().clone();
+            let params = crate::wasapi_out::ExclusiveParams {
+                device_pref: pref.clone(),
+                channels: 2,
+                src_rate,
+                volume_bits: Arc::clone(&self.volume),
+                speed_bits: Arc::clone(&self.speed),
+            };
+            match crate::wasapi_out::spawn_exclusive_session(
+                BoxedSrc(Box::new(wrapped)),
+                params,
+            ) {
+                Ok((ctl, rx)) => {
+                    // 必须有超时：设备驱动的 COM 调用可能无限期阻塞，
+                    // 而这里跑在 async 命令的工作线程上，不能被拖住。
+                    match rx.recv_timeout(EXCLUSIVE_OPEN_TIMEOUT) {
+                        Ok(Ok(())) => {
+                            let mut out = self.output.write();
+                            out.stop();
+                            *out = Output::Exclusive(ctl);
+                            self.sync_exclusive_status();
+                            return Ok(());
+                        }
+                        Ok(Err(e)) => {
+                            eprintln!("[engine] 独占模式不可用，已回退普通模式: {e}");
+                            *self.exclusive_retry_at.write() =
+                                Some(std::time::Instant::now() + EXCLUSIVE_RETRY_COOLDOWN);
+                        }
+                        Err(_) => {
+                            eprintln!("[engine] 独占模式初始化超时，已回退普通模式");
+                            crate::wasapi_out::wait_session_exit(&ctl, EXCLUSIVE_EXIT_TIMEOUT_MS);
+                            *self.exclusive_retry_at.write() =
+                                Some(std::time::Instant::now() + EXCLUSIVE_RETRY_COOLDOWN);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[engine] 无法启动独占会话: {e}");
+                    *self.exclusive_retry_at.write() =
+                        Some(std::time::Instant::now() + EXCLUSIVE_RETRY_COOLDOWN);
+                }
+            }
+            // 独占失败：源已被会话取走或从未使用，重新构建一份走共享
+            let src = rebuild()?;
+            let pref = self.device_pref.read().clone();
+            let (handle, sink) = Self::build_output(pref.as_deref())?;
+            let mut out = self.output.write();
+            out.stop();
+            *out = Output::Shared(sink);
+            *self.out.write() = handle;
+            out.clear();
+            out.append(BoxedSrc(Box::new(src)))?;
+            out.play();
+            self.sync_exclusive_status();
+            return Ok(());
+        }
+
+        // 共享模式：按需把后端切回共享
+        if self.output.read().is_exclusive() {
+            let pref = self.device_pref.read().clone();
+            let (handle, sink) = Self::build_output(pref.as_deref())?;
+            let mut out = self.output.write();
+            // 先等独占会话真正退出、设备交还系统，再建共享流，否则无声
+            out.stop();
+            *out = Output::Shared(sink);
+            *self.out.write() = handle;
+            self.sync_exclusive_status();
+        }
+        let mut out = self.output.write();
+        out.clear();
+        out.append(BoxedSrc(Box::new(wrapped)))?;
+        out.set_volume(f32::from_bits(self.volume.load(Ordering::Relaxed)));
+        out.set_speed(f32::from_bits(self.speed.load(Ordering::Relaxed)));
+        out.play();
+        Ok(())
+    }
+
+    fn exclusive_in_cooldown(&self) -> bool {
+        match *self.exclusive_retry_at.read() {
+            Some(until) => std::time::Instant::now() < until,
+            None => false,
+        }
     }
 
     pub fn pause(&self) {
@@ -565,121 +667,21 @@ impl Engine {
             }
         }
     }
-    /// FLAC 专用：重开文件并丢弃到目标时长，重建播放链
+    /// 从指定位置重建播放链（FLAC 定位失败、以及独占模式下的定位都走这里）。
+    /// 独占后端无法原地定位（采样源已被会话线程消费），统一重开播放链。
     fn rebuild_at(&self, info: &TrackInfo, ms: u64) -> Result<(), String> {
-        let file = std::fs::File::open(&info.path).map_err(|e| format!("重开文件失败: {e}"))?;
-        let src = Decoder::new(buffered_reader(file))
-            .map_err(|e| format!("重新解码失败: {e}"))?
-            .convert_samples::<f32>()
-            .skip_duration(Duration::from_millis(ms));
-        let wrapped =
-            EqSource::with_base(src, self.eq.clone(), self.pos_ms.clone(), ms as f64);
-        self.pos_ms.store(ms, Ordering::Relaxed);
-        self.dur_ms.store(info.duration_ms, Ordering::Relaxed);
-        let sr = wrapped.sample_rate();
-        self.ensure_backend(sr);
-        let was_paused = self.user_paused.load(Ordering::Relaxed);
-        {
-            let mut out = self.output.write();
-            out.clear();
-            out.append(BoxedSrc(Box::new(wrapped)));
-            out.set_volume(f32::from_bits(self.volume.load(Ordering::Relaxed)));
-            out.set_speed(f32::from_bits(self.speed.load(Ordering::Relaxed)));
-            if was_paused {
-                out.pause();
-            } else {
-                out.play();
-            }
-        }
-        Ok(())
+        self.start(info.path.clone(), info.clone(), ms)
     }
 
     // ---------- 独占模式 ----------
 
-    /// 用当前曲目的文件探测源采样率；探测不出就退回 48k（多数设备都认）
-    fn probe_source_rate(&self, info: Option<&TrackInfo>) -> u32 {
-        if let Some(i) = info {
-            if !i.path.is_empty() {
-                if let Ok(file) = File::open(&i.path) {
-                    if let Ok(dec) = Decoder::new(buffered_reader(file)) {
-                        let sr = dec.sample_rate();
-                        if (8000..=192000).contains(&sr) {
-                            return sr;
-                        }
-                    }
-                }
-            }
-        }
-        48000
-    }
-
-    /// 每首开播前确认后端与用户意图一致。
-    /// 独占开启 → 尝试打开独占，失败就回退共享并记下原因（下一首仍会重试）。
-    fn ensure_backend(&self, src_rate: u32) {
-        let want = self.exclusive_requested.load(Ordering::Relaxed);
-        if want == self.output.read().is_exclusive() {
-            return;
-        }
-        // 独占失败后的冷却期内直接沿用共享模式，不重复付出设备枚举与等待
-        if want {
-            if let Some(until) = *self.exclusive_retry_at.read() {
-                if std::time::Instant::now() < until {
-                    return;
-                }
-            }
-        }
-        let pref = self.device_pref.read().clone();
-        if want {
-            match crate::exclusive::ExclusiveSink::open(pref.as_deref(), src_rate) {
-                Ok(ex) => {
-                    let mut out = self.output.write();
-                    out.stop();
-                    *out = Output::Exclusive(ex);
-                }
-                Err(e) => {
-                    // 打不开独占：回退共享模式，原因交给界面提示。
-                    // 同时进入冷却，避免不支持的设备把每首歌都卡一遍。
-                    eprintln!("[engine] 独占模式不可用，已回退普通模式: {e}");
-                    *self.exclusive_retry_at.write() =
-                        Some(std::time::Instant::now() + EXCLUSIVE_RETRY_COOLDOWN);
-                    let (handle, sink) = match Self::build_output(pref.as_deref()) {
-                        Ok(v) => v,
-                        Err(e2) => {
-                            eprintln!("[engine] 共享模式也打不开: {e2}");
-                            return;
-                        }
-                    };
-                    let mut out = self.output.write();
-                    out.stop();
-                    *out = Output::Shared(sink);
-                    *self.out.write() = handle;
-                }
-            }
-        } else {
-            *self.exclusive_retry_at.write() = None;
-            let (handle, sink) = match Self::build_output(pref.as_deref()) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("[engine] 切回普通模式失败: {e}");
-                    return;
-                }
-            };
-            let mut out = self.output.write();
-            out.stop();
-            *out = Output::Shared(sink);
-            *self.out.write() = handle;
-        }
-        self.sync_exclusive_status();
-    }
-
-    /// 把"是否真的在跑独占 + 不可用原因"同步到共享状态，
-    /// 独占渲染线程被驱动掐断时也能及时反映出来
+    /// 把"是否真的在跑独占"同步到共享状态，供设置页展示
     fn sync_exclusive_status(&self) {
         let mut st = self.exclusive_status.write();
-        if let Output::Exclusive(ex) = &*self.output.read() {
-            *st = (true, ex.thread_error());
-        } else {
-            *st = (false, None);
+        let active = self.output.read().is_exclusive();
+        st.0 = active;
+        if !active {
+            st.1 = None;
         }
     }
 
@@ -708,24 +710,20 @@ impl Engine {
     }
 
     /// 独占模式状态给界面用：{ enabled, active, reason, device, rate }
+    /// 独占会话（wasapi_out）不向外暴露协商结果，设备/采样率改用当前偏好设备描述。
     pub fn exclusive_info(&self) -> serde_json::Value {
         let (active, reason) = self.exclusive_status.read().clone();
-        let (device, rate) = {
-            let out = self.output.read();
-            match &*out {
-                Output::Exclusive(ex) => {
-                    (Some(ex.device_name().to_string()), Some(ex.device_rate()))
-                }
-                _ => (None, None),
-            }
-        };
         let active = active && self.output.read().is_exclusive();
+        let device = self
+            .device_preference()
+            .unwrap_or_else(|| self.current_device_name());
         serde_json::json!({
             "enabled": self.exclusive_requested(),
             "active": active,
             "reason": if active { None } else { reason },
-            "device": device,
-            "rate": rate,
+            "device": if active { Some(device) } else { None },
+            // 独占会话不向外暴露协商出的采样率
+            "rate": Option::<u32>::None,
         })
     }
 

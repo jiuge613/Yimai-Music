@@ -706,7 +706,7 @@ export default function SettingsView() {
             </button>
             <span className="text-[11.5px] text-[var(--ink-3)] leading-relaxed">
               {excl?.active
-                ? `已生效 · 设备 ${excl.device} · ${excl.rate} Hz 直通`
+                ? `已生效 · ${excl.device ?? "当前设备"} 直通输出`
                 : excl?.enabled
                   ? "已开启，将在下一首生效"
                   : "绕过系统混音器直连声卡，采样率按源文件直通，不经系统重采样与音效处理"}
@@ -725,7 +725,7 @@ export default function SettingsView() {
           )}
           {exclProbe?.supported && (
             <p className="text-[11.5px] text-[var(--ink-3)] mt-2 leading-relaxed">
-              检测结果：{exclProbe.device} 支持独占（{exclProbe.rate} Hz）。
+              检测结果：当前设备{exclProbe.device ? `（${exclProbe.device}）` : ""}支持独占。
             </p>
           )}
           <p className="text-[11.5px] text-[var(--ink-3)] mt-2 leading-relaxed">
