@@ -19,37 +19,42 @@ use tauri::{AppHandle, Emitter};
 /// 万一重定向在个别网络下失效，只需改这一行。
 const GITHUB_REPO: &str = "jiuge613/Yimai-Music";
 const UA: &str = "YimaiMusic-Updater";
-/// 单个下载来源的连接/传输超时：安装包 10~20 MB，弱网 180s 足够；
-/// 某来源卡死/无响应时在该超时后快速切换下一个候选源，避免整体挂起。
-const SOURCE_TIMEOUT: Duration = Duration::from_secs(180);
+/// 单个下载来源的连接/传输超时。
+///
+/// 原为 180s，是"更新要等很久"的直接原因：直连 GitHub 排在候选第一位，
+/// 国内网络下会先卡满 180 秒才切到镜像，而实测可用镜像跑完 9.6MB 只要
+/// 5~10 秒。20s 足够任何可用链路传完整个安装包；传不完就说明这条源不行，
+/// 立刻换下一个，不值得为一个死源等 3 分钟。
+const SOURCE_TIMEOUT: Duration = Duration::from_secs(20);
 
 static DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// GitHub 下载代理镜像（ghproxy 风格：`{mirror}/{github 原链接}`）。
-/// 仅用于「下载 GitHub 附件」的兜底切换：直连失败/超时/连接被重置时按序尝试，
-/// 国内网络下显著提升更新包下载成功率。顺序=按实测可用性排前的源在前；
-/// 失效的源会被快速跳过（连接失败即切换），不影响最终结果。
-/// 新增/移除镜像只维护这个列表即可，UI 无需任何改动。
+///
+/// 2026-09-27 对 v1.1.1 安装包逐个实测（取前 3MB 计时，跑 2 轮），结果：
+/// - 可用：ghfile.geekertao (0.5~2.1 MB/s)、gh-proxy.com (1.2~1.5)、
+///   github.chenc.dev (1.1~1.2)
+/// - 已死：ghproxy.mnjiang.cn / gh.kichills.cn / cdn.akacoder.online 等
+///   （DNS ENOTFOUND）、ghproxy.cc（证书已过期）
+/// 已死的从列表移除——留着只会浪费一轮连接；实测可用的排到最前，
+/// 减少切换次数。失效的源仍会被快速跳过，不影响最终结果。
 const GITHUB_MIRRORS: &[&str] = &[
-    "https://ghproxy.cc/",
+    // ── 实测可用（按速度） ──
+    "https://ghfile.geekertao.top/",
+    "https://gh-proxy.com/",
+    "https://github.chenc.dev/",
+    // ── 备用（未实测通过，但留着无害，失败即跳过） ──
     "https://gh.monoliker.com/",
     "https://gproxy.twinzips.top/",
-    "https://ghproxy.mnjiang.cn/",
     "https://ghproxy.mciel.com/",
-    "https://github.chenc.dev/",
-    "https://ghfile.geekertao.top/",
     "https://gh.llk-exmfr52bqpe.top/",
     "https://gh.kleyeas.com/",
     "https://ghm.0t8465.xyz/",
-    "https://gh-proxy.com/",
     "https://github-proxy-memory-echoes.cn/",
-    "https://fastgit.cc/",
     "https://gh.nokiu.com/",
     "https://gh.gxpk.top/",
     "https://gh.xcxxxo.cf/",
     "https://tv.tw/",
-    "https://gh.kichills.cn/",
-    "https://cdn.akacoder.online/",
 ];
 
 /// GitHub 附件直链（api.github.com 返回的 browser_download_url）形如：
@@ -453,18 +458,35 @@ mod tests {
         let url = "https://github.com/jiuge613/YimaiMusic/releases/download/v0.1.11/setup.exe";
         let c = mirror_candidates(url);
         // 直连在最前
-        assert_eq!(
-            c.first().unwrap(),
-            "https://github.com/jiuge613/YimaiMusic/releases/download/v0.1.11/setup.exe"
-        );
+        assert_eq!(c.first().unwrap(), url);
         // 紧跟各镜像，且每个都拼「完整 https://github.com/...」
-        assert_eq!(
-            c.get(1).unwrap(),
-            "https://ghproxy.cc/https://github.com/jiuge613/YimaiMusic/releases/download/v0.1.11/setup.exe"
-        );
+        // 不写死具体镜像名：列表会随实测结果增删，写死会让换源时测试误报
+        for (i, m) in GITHUB_MIRRORS.iter().enumerate() {
+            assert_eq!(
+                c.get(1 + i).unwrap(),
+                &format!("{m}{url}"),
+                "第 {} 个镜像拼接不对", i + 1
+            );
+        }
         assert_eq!(c.len(), 1 + GITHUB_MIRRORS.len());
-        // 末个镜像也正确拼接
-        assert!(c.last().unwrap().starts_with("https://cdn.akacoder.online/https://github.com/"));
+        // 列表里不得有重复，否则同一源会被白试一遍
+        let mut uniq = GITHUB_MIRRORS.to_vec();
+        uniq.sort_unstable();
+        uniq.dedup();
+        assert_eq!(uniq.len(), GITHUB_MIRRORS.len(), "GITHUB_MIRRORS 有重复项");
+        // 已实测失效的源必须移除（证书过期 / DNS 死亡，留着只会浪费一轮连接）
+        for dead in [
+            "https://ghproxy.cc/",
+            "https://ghproxy.mnjiang.cn/",
+            "https://gh.kichills.cn/",
+            "https://cdn.akacoder.online/",
+            "https://fastgit.cc/",
+        ] {
+            assert!(
+                !GITHUB_MIRRORS.contains(&dead),
+                "{dead} 已失效，应从镜像列表移除"
+            );
+        }
     }
 
     #[test]

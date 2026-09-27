@@ -12,6 +12,7 @@ import {
   MicVocal,
   RefreshCw,
   RotateCcw,
+  ScrollText,
   Settings as SettingsIcon,
   Trash2,
   X,
@@ -867,6 +868,18 @@ export default function SettingsView() {
                 <RefreshCw size={12.5} />
               )}
               检查更新
+            </button>
+            <button
+              className="btn-ghost !py-1.5 !px-3 ml-auto"
+              title="打开日志所在目录（排障用）"
+              onClick={() => {
+                api
+                  .openAppLog()
+                  .catch((e) => useStore.getState().toast(String(e), "error"));
+              }}
+            >
+              <ScrollText size={12.5} />
+              日志
             </button>
           </div>
           <div className="flex items-center gap-4 mt-3">

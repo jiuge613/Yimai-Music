@@ -469,6 +469,7 @@ impl Engine {
         let diag_sr = wrapped.sample_rate();
         let diag_ch = wrapped.channels();
         let diag_dur = wrapped.total_duration();
+        let _ = diag_dur;
         self.pos_ms.store(skip_ms, Ordering::Relaxed);
         self.dur_ms
             .store(info.duration_ms, Ordering::Relaxed);
@@ -476,21 +477,31 @@ impl Engine {
         self.switching.store(true, Ordering::Relaxed);
         let result = self.start_backend(wrapped, build, diag_sr);
         self.switching.store(false, Ordering::Relaxed);
+        if let Err(e) = &result {
+            crate::logfile::write(&format!(
+                "[engine] start 失败 kind={} path={} err={e}",
+                info.kind, info.path
+            ));
+        }
         result?;
         self.user_paused.store(false, Ordering::Relaxed);
         self.stopped.store(false, Ordering::Relaxed);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[engine] started: kind={} path={} total_duration={:?} sr={} ch={} exclusive={}",
-            info.kind, info.path, diag_dur, diag_sr, diag_ch, self.is_exclusive_active(),
-        );
+        crate::logfile::write(&format!(
+            "[engine] started kind={} title={:?} path={} sr={} ch={} dur={}ms exclusive={}",
+            info.kind,
+            info.title,
+            info.path,
+            diag_sr,
+            diag_ch,
+            info.duration_ms,
+            self.is_exclusive_active(),
+        ));
         *self.current.write() = Some(info.clone());
         self.notify_smtc();
         let seq = self.play_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        let _ = self.app.emit(
-            "player://state",
-            PlayState { playing: true, info, seq },
-        );
+        let ps = PlayState { playing: true, info, seq };
+        let r = self.app.emit("player://state", ps);
+        crate::logfile::write(&format!("[engine] emit player://state seq={seq} -> {r:?}"));
         Ok(())
     }
 
@@ -901,6 +912,12 @@ impl Engine {
         }
         let (key, ext) = self.cache_key_for(&url, &info);
         let cache = self.cache_path_for(&key, &ext);
+        crate::logfile::write(&format!(
+            "[engine] play_url kind={} title={:?} key={key} ext={ext} 缓存命中={}",
+            info.kind,
+            info.title,
+            cache.exists() && cache.metadata().map(|m| m.len() > 0).unwrap_or(false)
+        ));
         if cache.exists() && cache.metadata().map(|m| m.len() > 0).unwrap_or(false) {
             // 命中缓存：更新访问时间（LRU 依据），当前曲目直接播放
             let _ = filetime::set_file_mtime(
@@ -952,6 +969,9 @@ impl Engine {
                     // 判定用"是否队首"而不是"是否存在"：点 A 再点 B 后，
                     // A 先下完时排在队尾，不该抢在 B 前面播。
                     let still_wanted = engine.want_is_latest(&url);
+                    crate::logfile::write(&format!(
+                        "[engine] 下载完成 key={key} 仍为最新意图={still_wanted}"
+                    ));
                     if still_wanted {
                         let mut info = info;
                         info.path = cache.to_string_lossy().into_owned();
@@ -960,17 +980,28 @@ impl Engine {
                         }
                         // 下载成功但解码失败 = 内容不是有效音频（多半是网页/接口响应），
                         // 删除坏缓存并上报错误，避免坏文件常驻缓存被反复命中
-                        if let Err(e) = engine.play_file(info) {
-                            let _ = std::fs::remove_file(&cache);
-                            let _ = app.emit(
-                                "download://progress",
-                                serde_json::json!({ "url": url, "done": true, "error": e }),
-                            );
+                        match engine.play_file(info) {
+                            Ok(()) => crate::logfile::write(&format!(
+                                "[engine] 缓存命中开播成功 key={key}"
+                            )),
+                            Err(e) => {
+                                crate::logfile::write(&format!(
+                                    "[engine] 缓存解码失败 key={key} err={e}"
+                                ));
+                                let _ = std::fs::remove_file(&cache);
+                                let _ = app.emit(
+                                    "download://progress",
+                                    serde_json::json!({ "url": url, "done": true, "error": e }),
+                                );
+                            }
                         }
                     } else {
                         // 已被更新的意图取代：不播，但缓存保留，下次点它可直接命中。
                         // 这里不 emit done —— 前端进度条按"有没有 done"清除，
                         // 对别人的 URL 发 done 会把当前正在显示的下载条误清掉。
+                        crate::logfile::write(&format!(
+                            "[engine] 放弃开播（已被更新的意图取代）key={key}"
+                        ));
                     }
                     // 下载成功后按上限清理（跳过正在播放/下载中的文件）
                     engine.evict_cache();

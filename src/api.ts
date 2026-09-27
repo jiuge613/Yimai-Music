@@ -316,6 +316,9 @@ export const api = {
   setCacheLimit: (bytes: number) =>
     invoke<void>("set_cache_limit", { bytes }),
   getAppInfo: () => invoke<{ version: string; dataDir: string }>("get_app_info"),
+  /** 读取应用日志（release 版无控制台，出问题靠这个） */
+  readAppLog: () => invoke<string>("read_app_log"),
+  openAppLog: () => invoke<void>("open_app_log"),
   desktopLyricsOpen: () => invoke<void>("desktop_lyrics_open"),
   desktopLyricsClose: () => invoke<void>("desktop_lyrics_close"),
   desktopLyricsUnlock: () => invoke<void>("desktop_lyrics_unlock"),

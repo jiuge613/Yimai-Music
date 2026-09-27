@@ -4,10 +4,10 @@ mod commands;
 mod db;
 mod engine;
 mod eq;
-mod wasapi_out;
 mod gdstudio;
 mod kugou;
 mod library;
+mod logfile;
 mod lyrics;
 mod lxsource;
 mod models;
@@ -16,6 +16,7 @@ mod qq;
 mod qrc;
 mod smtc;
 mod updater;
+mod wasapi_out;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -457,6 +458,14 @@ fn main() {
             std::fs::create_dir_all(app_data.join("covers")).map_err(|e| e.to_string())?;
             std::fs::create_dir_all(app_data.join("downloads")).map_err(|e| e.to_string())?;
 
+            // 文件日志：release 版没有控制台，出问题必须留痕
+            logfile::init(&app_data);
+            logfile::write(&format!(
+                "启动 v{}  pid={}",
+                app.package_info().version,
+                std::process::id()
+            ));
+
             let conn = db::init(&app_data.join("library.db"))?;
 
             // 读取用户设置
@@ -609,6 +618,8 @@ fn main() {
             commands::clear_downloads,
             commands::open_download_location,
             commands::export_downloads,
+            commands::read_app_log,
+            commands::open_app_log,
             commands::liked_online_list,
             commands::recent_online_list,
             commands::save_dir_get,

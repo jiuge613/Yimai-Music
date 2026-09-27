@@ -2213,6 +2213,24 @@ fn run_download_job(app: AppHandle, req: OnlineSaveReq) {
     );
 }
 
+/// 读取应用日志（诊断用）。release 版无控制台，出问题靠这个文件。
+#[tauri::command]
+pub async fn read_app_log(state: State<'_, AppState>) -> Result<String, String> {
+    let p = state.app_data.join("yimai.log");
+    std::fs::read_to_string(&p).map_err(|e| format!("暂无日志（{}）：{e}", p.display()))
+}
+
+/// 在资源管理器里定位日志文件
+#[tauri::command]
+pub async fn open_app_log(state: State<'_, AppState>) -> Result<(), String> {
+    let dir = state.app_data.clone();
+    std::process::Command::new("explorer")
+        .arg(dir.to_string_lossy().to_string())
+        .spawn()
+        .map_err(|e| format!("打开目录失败: {e}"))?;
+    Ok(())
+}
+
 /// 列出下载任务。status 为空返回全部。
 #[tauri::command]
 pub async fn list_downloads(
