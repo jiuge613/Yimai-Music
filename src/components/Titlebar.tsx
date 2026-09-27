@@ -6,9 +6,13 @@ import { useStore } from "../store";
 export default function Titlebar() {
   const [maximized, setMaximized] = useState(false);
   const win = getCurrentWindow();
-  const canGoBack =
-    useStore((s) => s.navHistory.length > 0) ||
-    (useStore((s) => s.view) === "detail" && useStore((s) => s.detailStack.length) > 0);
+  // 三个 useStore 必须无条件调用：早先把它们写在 || 两侧，
+  // navHistory 一变非空就短路，右边两个 hook 被跳过 → hook 数量在渲染间
+  // 改变 → React 槽位错位，点任意导航项直接白屏。
+  const hasNavHistory = useStore((s) => s.navHistory.length > 0);
+  const isDetailView = useStore((s) => s.view === "detail");
+  const hasDetailStack = useStore((s) => s.detailStack.length > 0);
+  const canGoBack = hasNavHistory || (isDetailView && hasDetailStack);
   const back = useStore((s) => s.back);
 
   useEffect(() => {

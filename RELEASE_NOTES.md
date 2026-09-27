@@ -1,6 +1,41 @@
-# Yimai Music v1.1.0
+# Yimai Music v1.1.1
 
-## 新增：下载管理
+## 紧急修复：点击任意导航项后主界面白屏
+
+**问题**：点击侧边栏的**任何**导航按钮后，主界面变白且无响应，必须重启应用。
+
+**根因**：`Titlebar` 里把三个 `useStore` 写在了 `||` 两侧：
+
+```tsx
+// 有 bug 的写法
+const canGoBack =
+  useStore((s) => s.navHistory.length > 0) ||
+  (useStore((s) => s.view) === "detail" && useStore((s) => s.detailStack.length) > 0);
+```
+
+`||` 会短路：`navHistory` 一旦非空，右边两个 `useStore` **根本不会被调用**。而点击任意导航项恰好会往 `navHistory` 压一条记录，于是**每次渲染调用的 hook 数量从 3 个变成 1 个**，React 的 hook 槽位错位，在对比依赖数组时抛异常，整个应用树崩溃 → 白屏。
+
+**修复**：三个 `useStore` 改为无条件调用，再用布尔表达式组合：
+
+```tsx
+const hasNavHistory = useStore((s) => s.navHistory.length > 0);
+const isDetailView = useStore((s) => s.view === "detail");
+const hasDetailStack = useStore((s) => s.detailStack.length > 0);
+const canGoBack = hasNavHistory || (isDetailView && hasDetailStack);
+```
+
+已全量扫描 `src/`，确认没有其它同类短路 hook 调用。
+
+## v1.1.0 内容回顾
+
+- **新增下载管理**：已下载/下载中双页签、六字段列表、失败重试、打开所在位置、批量删除、导出 CSV、2 个 worker 的下载队列
+- **播放模式合并为一个按钮**：顺序播放 / 循环播放 / 单曲循环 / 随机播放，竖排浮层四选一
+- **侧栏分组化**：一级四项 + 折叠的「更多」组（下载管理 / 在线音源 / 知名平台）
+- **修复**：自定义下载目录下导出 CSV 必然失败（前端用 default 拼路径、后端按实际目录校验）
+- **修复**：下载管理「播放全部」静默无反应
+- **修复**：worker 线程里多余的 `block_on`（在运行时线程内会 panic）
+
+
 
 侧栏「更多 → 下载管理」。以前点下载只能看到播放条上一条一闪而过的进度条，现在有完整的任务体系：
 
