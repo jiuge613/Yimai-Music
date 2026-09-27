@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
+use serde::Serialize;
 
 use crate::models::{Folder, LxSourceItem, Playlist, SourceItem, TrackMeta};
 
@@ -113,6 +114,27 @@ CREATE TABLE IF NOT EXISTS manual_order (
   pos INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (list, row_key)
 );
+-- 下载管理任务表：把「点了下载」变成可查看、可重试、可删除的任务。
+-- id 形如 "netease:123"，同一首歌重复下载复用同一行（幂等，不会堆重复记录）。
+CREATE TABLE IF NOT EXISTS download_tasks (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  song_id TEXT NOT NULL,
+  media_mid TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  artist TEXT NOT NULL DEFAULT '',
+  album TEXT NOT NULL DEFAULT '',
+  cover TEXT NOT NULL DEFAULT '',
+  size INTEGER NOT NULL DEFAULT 0,
+  received INTEGER NOT NULL DEFAULT 0,
+  -- queued | downloading | done | failed
+  status TEXT NOT NULL DEFAULT 'queued',
+  error TEXT NOT NULL DEFAULT '',
+  file_path TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL DEFAULT 0,
+  finished_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_download_status ON download_tasks(status, created_at DESC);
 "#;
 
 /// 查询用索引。放在 migrate() 尾部而不是 SCHEMA 里：
@@ -1227,6 +1249,196 @@ pub fn reorder_playlist(conn: &Connection, pid: i64, rowids: &[i64]) {
             params![pid, rid, (i + 1) as i64],
         );
     }
+}
+
+// ---------- 下载管理 ----------
+
+/// 一条下载任务（列表页的一行）
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadTask {
+    pub id: String,
+    pub kind: String,
+    pub song_id: String,
+    pub media_mid: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub cover: String,
+    pub size: i64,
+    pub received: i64,
+    /// queued | downloading | done | failed
+    pub status: String,
+    pub error: String,
+    pub file_path: String,
+    pub created_at: i64,
+    pub finished_at: i64,
+}
+
+const DL_COLS: &str = "id, kind, song_id, media_mid, title, artist, album, cover, \
+     size, received, status, error, file_path, created_at, finished_at";
+
+fn dl_from_row(r: &Row) -> rusqlite::Result<DownloadTask> {
+    Ok(DownloadTask {
+        id: r.get(0)?,
+        kind: r.get(1)?,
+        song_id: r.get(2)?,
+        media_mid: r.get(3)?,
+        title: r.get(4)?,
+        artist: r.get(5)?,
+        album: r.get(6)?,
+        cover: r.get(7)?,
+        size: r.get(8)?,
+        received: r.get(9)?,
+        status: r.get(10)?,
+        error: r.get(11)?,
+        file_path: r.get(12)?,
+        created_at: r.get(13)?,
+        finished_at: r.get(14)?,
+    })
+}
+
+/// 列出任务。`status` 为空时返回全部，按创建时间倒序（新的在前）。
+pub fn list_download_tasks(conn: &Connection, status: &str) -> Vec<DownloadTask> {
+    let sql = if status.is_empty() {
+        format!("SELECT {DL_COLS} FROM download_tasks ORDER BY created_at DESC, rowid DESC")
+    } else {
+        format!("SELECT {DL_COLS} FROM download_tasks WHERE status = ?1 ORDER BY created_at DESC, rowid DESC")
+    };
+    let mut stmt = match conn.prepare(&sql) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[db] 读取下载任务失败: {e}");
+            return vec![];
+        }
+    };
+    let rows = if status.is_empty() {
+        stmt.query_map([], dl_from_row)
+    } else {
+        stmt.query_map(params![status], dl_from_row)
+    };
+    match rows {
+        Ok(r) => r.filter_map(|x| x.ok()).collect(),
+        Err(e) => {
+            eprintln!("[db] 读取下载任务失败: {e}");
+            vec![]
+        }
+    }
+}
+
+/// 登记/覆盖一个下载任务（按 id 幂等）。已完成的重复点击不再重置为 queued。
+pub fn upsert_download_task(conn: &Connection, t: &DownloadTask) {
+    let _ = conn.execute(
+        "INSERT INTO download_tasks
+           (id, kind, song_id, media_mid, title, artist, album, cover,
+            size, received, status, error, file_path, created_at, finished_at)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+         ON CONFLICT(id) DO UPDATE SET
+           title=excluded.title, artist=excluded.artist, album=excluded.album,
+           cover=excluded.cover, media_mid=excluded.media_mid,
+           size=CASE WHEN excluded.size > 0 THEN excluded.size ELSE download_tasks.size END,
+           status=excluded.status, error=excluded.error,
+           file_path=excluded.file_path, received=excluded.received,
+           finished_at=excluded.finished_at",
+        params![
+            t.id, t.kind, t.song_id, t.media_mid, t.title, t.artist, t.album, t.cover,
+            t.size, t.received, t.status, t.error, t.file_path, t.created_at, t.finished_at,
+        ],
+    );
+}
+
+/// 只更新进度与状态，避免整行覆写时把标题等字段清空。
+pub fn update_download_progress(conn: &Connection, id: &str, received: i64, total: i64) {
+    let _ = conn.execute(
+        "UPDATE download_tasks SET received = ?2,
+           size = CASE WHEN ?3 > 0 THEN ?3 ELSE size END
+         WHERE id = ?1",
+        params![id, received, total],
+    );
+}
+
+pub fn set_download_status(conn: &Connection, id: &str, status: &str, error: &str, file_path: &str) {
+    let _ = conn.execute(
+        "UPDATE download_tasks
+            SET status = ?2, error = ?3,
+                file_path = CASE WHEN ?4 != '' THEN ?4 ELSE file_path END,
+                finished_at = CASE WHEN ?2 = 'done' THEN ?5 ELSE finished_at END
+          WHERE id = ?1",
+        params![id, status, error, file_path, now_secs()],
+    );
+}
+
+pub fn get_download_task(conn: &Connection, id: &str) -> Option<DownloadTask> {
+    conn.query_row(
+        &format!("SELECT {DL_COLS} FROM download_tasks WHERE id = ?1"),
+        params![id],
+        dl_from_row,
+    )
+    .ok()
+}
+
+/// 删除任务记录。`done` 为 true 时一并删除磁盘文件（仅限仍在本任务记录里的成品）。
+pub fn delete_download_task(conn: &Connection, id: &str, done: bool) {
+    if done {
+        if let Some(t) = get_download_task(conn, id) {
+            if t.status == "done" && !t.file_path.is_empty() {
+                let _ = std::fs::remove_file(&t.file_path);
+            }
+        }
+    }
+    let _ = conn.execute("DELETE FROM download_tasks WHERE id = ?1", params![id]);
+}
+
+/// 清空某个状态的所有任务（"全部删除"用）。返回被删记录的磁盘文件路径。
+pub fn clear_download_tasks(conn: &Connection, status: &str, delete_files: bool) -> Vec<String> {
+    let sql = if status.is_empty() {
+        "SELECT id, status, file_path FROM download_tasks"
+    } else {
+        "SELECT id, status, file_path FROM download_tasks WHERE status = ?1"
+    };
+    let mut stmt = match conn.prepare(sql) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[db] 清理下载任务失败: {e}");
+            return vec![];
+        }
+    };
+    let map = |r: &Row| -> rusqlite::Result<(String, String, String)> {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+    };
+    // 先把要删的行读出来再删：直接边遍历边删会与本语句的游标冲突
+    let items: Vec<(String, String, String)> = if status.is_empty() {
+        stmt.query_map([], map)
+            .map(|r| r.flatten().collect())
+            .unwrap_or_default()
+    } else {
+        stmt.query_map(params![status], map)
+            .map(|r| r.flatten().collect())
+            .unwrap_or_default()
+    };
+    drop(stmt);
+    let mut files = vec![];
+    for (id, st, path) in items {
+        if delete_files && st == "done" && !path.is_empty() {
+            let _ = std::fs::remove_file(&path);
+            files.push(path);
+        }
+        let _ = conn.execute("DELETE FROM download_tasks WHERE id = ?1", params![id]);
+    }
+    files
+}
+/// 统计各状态数量，供列表页头部展示。
+#[allow(dead_code)]
+pub fn download_counts(conn: &Connection) -> std::collections::HashMap<String, i64> {
+    let mut m = std::collections::HashMap::new();
+    if let Ok(mut s) = conn.prepare("SELECT status, COUNT(*) FROM download_tasks GROUP BY status") {
+        if let Ok(rows) = s.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
+            for (k, v) in rows.flatten() {
+                m.insert(k, v);
+            }
+        }
+    }
+    m
 }
 
 #[cfg(test)]

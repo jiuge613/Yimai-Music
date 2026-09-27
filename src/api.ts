@@ -209,6 +209,32 @@ export const api = {
     durationMs: number;
     mediaMid: string;
   }) => invoke<string>("download_online", { req }),
+  // ---------- 下载管理 ----------
+  /** 列出下载任务；status 传空字符串表示全部 */
+  listDownloads: (status = "") =>
+    invoke<import("./types").DownloadTask[]>("list_downloads", { status }),
+  /** 加入下载队列（并发受后端 worker 数限制），返回任务 id */
+  enqueueDownload: (req: {
+    kind: string;
+    id: string;
+    title: string;
+    artist: string;
+    album: string;
+    coverUrl: string;
+    durationMs: number;
+    mediaMid: string;
+  }) => invoke<string>("enqueue_download", { req }),
+  retryDownload: (taskId: string) =>
+    invoke<void>("retry_download", { taskId }),
+  deleteDownload: (taskId: string, deleteFile: boolean) =>
+    invoke<void>("delete_download", { taskId, deleteFile }),
+  clearDownloads: (status: string, deleteFiles: boolean) =>
+    invoke<number>("clear_downloads", { status, deleteFiles }),
+  openDownloadLocation: (taskId: string) =>
+    invoke<void>("open_download_location", { taskId }),
+  /** 导出当前页签为 CSV，返回写好的文件路径（由后端落到下载目录） */
+  exportDownloads: (status = "") =>
+    invoke<string>("export_downloads", { status }),
   likedOnlineList: () =>
     invoke<import("./types").PlaylistEntryMeta[]>("liked_online_list"),
   recentOnlineList: () =>

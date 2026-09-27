@@ -216,6 +216,8 @@ export interface CurrentTrack extends TrackInfo {
 }
 
 export type RepeatMode = "off" | "all" | "one";
+/** 播放模式：把"循环"与"随机"归为一个四选一控件 */
+export type PlayMode = "order" | "all" | "one" | "shuffle";
 
 export type QueueItemKind =
   | "track"
@@ -257,7 +259,9 @@ export type ViewName =
   | "settings"
   | "playlist"
   /** 歌手 / 专辑详情页（由 openDetailPage 压栈进入，不出现在侧边栏） */
-  | "detail";
+  | "detail"
+  /** 下载管理 */
+  | "downloads";
 
 export interface ScanState {
   active: boolean;
@@ -315,6 +319,26 @@ export interface GdStatus {
   base: string;
   /** 出处标注，需在界面显示 */
   attribution: string;
+}
+
+/** 下载管理任务（后端 download_tasks 表的一行） */
+export interface DownloadTask {
+  id: string;
+  kind: string;
+  songId: string;
+  mediaMid: string;
+  title: string;
+  artist: string;
+  album: string;
+  cover: string;
+  /** 字节；服务端未给 content-length 时为 0 */
+  size: number;
+  received: number;
+  status: "queued" | "downloading" | "done" | "failed";
+  error: string;
+  filePath: string;
+  createdAt: number;
+  finishedAt: number;
 }
 
 /** GitHub 最新 release 的可安装更新信息 */

@@ -5,6 +5,7 @@ import {
   Disc3,
   Globe,
   Heart,
+  LayoutGrid,
   Library,
   ListMusic,
   Loader2,
@@ -15,6 +16,7 @@ import {
   Radio,
   Settings,
   DiscAlbum,
+  Download as DownloadIcon,
   TrendingUp,
 } from "lucide-react";
 import { useState } from "react";
@@ -28,15 +30,22 @@ import { clampMenuPos } from "../utils";
 import { useDragList } from "../hooks/useDragList";
 import type { ViewName } from "../types";
 
+// 侧栏一级：常用入口，常驻显示。
+// 「排行榜」按参考设计留在顶层（不归入「更多」分组）。
 const NAV_MAIN: { key: ViewName; label: string; icon: typeof Library }[] = [
   { key: "library", label: "本地音乐", icon: Library },
   { key: "liked", label: "我喜欢", icon: Heart },
   { key: "recent", label: "最近播放", icon: Clock3 },
-  { key: "sources", label: "在线音源", icon: Radio },
   { key: "ranking", label: "排行榜", icon: TrendingUp },
 ];
 
-// 收纳在「知名平台」折叠组下的在线音乐平台入口
+// 「更多」分组内的平铺入口
+const NAV_MORE: { key: ViewName; label: string; icon: typeof Library }[] = [
+  { key: "downloads", label: "下载管理", icon: DownloadIcon },
+  { key: "sources", label: "在线音源", icon: Radio },
+];
+
+// 嵌套在「更多」下的「知名平台」子分组
 const NAV_PLATFORMS: { key: ViewName; label: string; icon: typeof Library }[] =
   [
     { key: "netease", label: "网易云", icon: Cloud },
@@ -63,7 +72,16 @@ export default function Sidebar() {
     null
   );
   const [skinOpen, setSkinOpen] = useState(false);
-  // 「知名平台」折叠组展开状态（记忆到 localStorage，默认展开）
+  // 「更多」折叠组展开状态（默认展开，保证平铺入口与知名平台都可见）
+  const [moreOpen, setMoreOpen] = useState(
+    () => localStorage.getItem("yimai.moreOpen") !== "0"
+  );
+  const toggleMore = () =>
+    setMoreOpen((v) => {
+      localStorage.setItem("yimai.moreOpen", v ? "0" : "1");
+      return !v;
+    });
+  // 「知名平台」子分组展开状态（记忆到 localStorage，默认展开）
   const [platOpen, setPlatOpen] = useState(
     () => localStorage.getItem("yimai.platformsOpen") !== "0"
   );
@@ -72,7 +90,8 @@ export default function Sidebar() {
       localStorage.setItem("yimai.platformsOpen", v ? "0" : "1");
       return !v;
     });
-  // 组内任一平台处于激活态（折叠时用于在组标题上保留高亮提示）
+  // 组内任一入口处于激活态（折叠时用于在组标题上保留高亮提示）
+  const moreActive = [...NAV_MORE, ...NAV_PLATFORMS].some((p) => p.key === view);
   const platformActive = NAV_PLATFORMS.some((p) => p.key === view);
   // 长按拖动排序：行序列 = 本地 state 的播放列表顺序
   const { rowProps } = useDragList((from, to) => {
@@ -147,73 +166,147 @@ export default function Sidebar() {
             );
           })}
 
-          {/* 知名平台：可折叠分组 */}
+          {/* ── 「更多」折叠组：在线音源 / 排行榜 + 嵌套的知名平台 ── */}
+          <div className="my-1.5 h-px bg-[var(--line)]" />
+
           <button
-            onClick={togglePlat}
-            aria-expanded={platOpen}
+            onClick={toggleMore}
+            aria-expanded={moreOpen}
             className={`nav-item relative h-11 pl-4 pr-3 rounded-xl flex items-center gap-3.5 text-[13.5px] transition-all duration-200 ${
-              platformActive
+              moreActive
                 ? "text-[var(--ink)] font-semibold"
                 : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
             }`}
             style={{ border: "1px solid transparent" }}
           >
-            {platformActive && (
+            {moreActive && (
               <span
                 className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full"
                 style={{ background: "var(--accent)" }}
               />
             )}
-            <Globe
+            <LayoutGrid
               size={17}
               strokeWidth={1.9}
-              className={platformActive ? "text-[var(--accent)]" : ""}
+              className={moreActive ? "text-[var(--accent)]" : ""}
             />
-            知名平台
+            更多
             <ChevronDown
               size={15}
               className={`ml-auto text-[var(--ink-3)] transition-transform duration-200 ${
-                platOpen ? "" : "-rotate-90"
+                moreOpen ? "" : "-rotate-90"
               }`}
             />
           </button>
 
-          {platOpen &&
-            NAV_PLATFORMS.map(({ key, label, icon: Icon }) => {
-              const active = view === key;
-              return (
-                <button
-                  key={key}
-                  onClick={() => setView(key)}
-                  className={`nav-item relative h-10 pl-[46px] pr-3 rounded-xl flex items-center gap-3 text-[13px] transition-all duration-200 ${
-                    active
-                      ? "text-[var(--ink)] font-semibold"
-                      : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
-                  }`}
-                  style={
-                    active
-                      ? {
-                          background: "var(--accent-weak)",
-                          border: "1px solid var(--accent-weak)",
-                        }
-                      : { border: "1px solid transparent" }
-                  }
-                >
-                  {active && (
-                    <span
-                      className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full"
-                      style={{ background: "var(--accent)" }}
+          {moreOpen && (
+            <>
+              {/* 更多 · 平铺入口 */}
+              {NAV_MORE.map(({ key, label, icon: Icon }) => {
+                const active = view === key;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setView(key)}
+                    className={`nav-item relative h-10 pl-[46px] pr-3 rounded-xl flex items-center gap-3 text-[13px] transition-all duration-200 ${
+                      active
+                        ? "text-[var(--ink)] font-semibold"
+                        : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
+                    }`}
+                    style={
+                      active
+                        ? {
+                            background: "var(--accent-weak)",
+                            border: "1px solid var(--accent-weak)",
+                          }
+                        : { border: "1px solid transparent" }
+                    }
+                  >
+                    {active && (
+                      <span
+                        className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full"
+                        style={{ background: "var(--accent)" }}
+                      />
+                    )}
+                    <Icon
+                      size={15}
+                      strokeWidth={1.9}
+                      className={active ? "text-[var(--accent)]" : "text-[var(--ink-3)]"}
                     />
-                  )}
-                  <Icon
-                    size={15}
-                    strokeWidth={1.9}
-                    className={active ? "text-[var(--accent)]" : "text-[var(--ink-3)]"}
+                    {label}
+                  </button>
+                );
+              })}
+
+              {/* 更多 · 「知名平台」子分组 */}
+              <button
+                onClick={togglePlat}
+                aria-expanded={platOpen}
+                className={`nav-item relative h-10 pl-[46px] pr-3 rounded-xl flex items-center gap-3 text-[13px] transition-all duration-200 ${
+                  platformActive
+                    ? "text-[var(--ink)] font-semibold"
+                    : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
+                }`}
+                style={{ border: "1px solid transparent" }}
+              >
+                {platformActive && (
+                  <span
+                    className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full"
+                    style={{ background: "var(--accent)" }}
                   />
-                  {label}
-                </button>
-              );
-            })}
+                )}
+                <Globe
+                  size={15}
+                  strokeWidth={1.9}
+                  className={platformActive ? "text-[var(--accent)]" : "text-[var(--ink-3)]"}
+                />
+                知名平台
+                <ChevronDown
+                  size={14}
+                  className={`ml-auto text-[var(--ink-3)] transition-transform duration-200 ${
+                    platOpen ? "" : "-rotate-90"
+                  }`}
+                />
+              </button>
+
+              {platOpen &&
+                NAV_PLATFORMS.map(({ key, label, icon: Icon }) => {
+                  const active = view === key;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setView(key)}
+                      className={`nav-item relative h-10 pl-[72px] pr-3 rounded-xl flex items-center gap-3 text-[12.5px] transition-all duration-200 ${
+                        active
+                          ? "text-[var(--ink)] font-semibold"
+                          : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
+                      }`}
+                      style={
+                        active
+                          ? {
+                              background: "var(--accent-weak)",
+                              border: "1px solid var(--accent-weak)",
+                            }
+                          : { border: "1px solid transparent" }
+                      }
+                    >
+                      {active && (
+                        <span
+                          className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full"
+                          style={{ background: "var(--accent)" }}
+                        />
+                      )}
+                      <Icon
+                        size={14}
+                        strokeWidth={1.9}
+                        className={active ? "text-[var(--accent)]" : "text-[var(--ink-3)]"}
+                      />
+                      {label}
+                    </button>
+                  );
+                })}
+            </>
+          )}
         </nav>
 
         {/* 播放列表 */}

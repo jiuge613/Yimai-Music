@@ -21,6 +21,7 @@ import type {
   CurrentTrack,
   PlaylistEntryMeta,
   DownloadState,
+  DownloadTask,
   Folder,
   LyricsPayload,
   NeteaseTrack,
@@ -31,6 +32,7 @@ import type {
   Playlist,
   QueueItem,
   RepeatMode,
+  PlayMode,
   ScanState,
   SourceItem,
   Toast,
@@ -95,6 +97,10 @@ interface Store {
   queueOpen: boolean;
   scan: ScanState;
   download: DownloadState | null;
+  /** 下载管理任务列表（含进行中/已完成/失败） */
+  downloadTasks: DownloadTask[];
+  /** 下载管理页当前页签：done=已下载，active=下载中 */
+  downloadTab: "done" | "active";
   toasts: Toast[];
   lyrics: LyricsPayload | null;
   lyricsLoading: boolean;
@@ -204,6 +210,9 @@ interface Store {
   setSpeed(v: number): void;
   setRepeat(m: RepeatMode): void;
   toggleShuffle(): void;
+  /** 统一播放模式（循环与随机归为一个四选一控件） */
+  playMode(): PlayMode;
+  setPlayMode(m: PlayMode): void;
 
   /** 桌面歌词：开关状态 + 打开/关闭/解锁动作 */
   desktopLyricsOn: boolean;
@@ -286,6 +295,31 @@ interface Store {
     durationMs: number;
     mediaMid?: string;
   }): Promise<void>;
+  // ---------- 下载管理 ----------
+  refreshDownloads(): Promise<void>;
+  patchDownloadTask(
+    id: string,
+    patch: { received?: number; size?: number }
+  ): void;
+  setDownloadTab(tab: "done" | "active"): void;
+  enqueueDownload(row: {
+    kind: string;
+    id: string | number;
+    name: string;
+    artist: string;
+    album: string;
+    cover: string;
+    durationMs?: number;
+    mediaMid?: string;
+  }): Promise<void>;
+  retryDownload(taskId: string): Promise<void>;
+  deleteDownload(taskId: string, deleteFile: boolean): Promise<void>;
+  clearDownloads(
+    status: "done" | "active" | "all",
+    deleteFiles: boolean
+  ): Promise<void>;
+  openDownloadLocation(taskId: string): Promise<void>;
+  exportDownloads(status: "done" | "active" | "all"): Promise<void>;
   downloadLx(row: {
     sourceId: number;
     platform: string;
@@ -564,6 +598,8 @@ export const useStore = create<Store>((set, get) => ({
   queueOpen: false,
   scan: { active: false, done: 0, total: 0 },
   download: null,
+  downloadTasks: [],
+  downloadTab: "done",
   toasts: [],
   lyrics: null,
   lyricsLoading: false,
@@ -737,12 +773,21 @@ export const useStore = create<Store>((set, get) => ({
     unbinds.push(
       await listenEvent<{
         url: string;
+        taskId?: string | null;
         pct?: number;
         done?: boolean;
         error?: string;
         received?: number;
         total?: number;
       }>("download://progress", (p) => {
+        // 队列下载：只更新对应任务行的进度，不占用播放条的全局进度
+        if (p.taskId) {
+          get().patchDownloadTask(p.taskId, {
+            received: p.received ?? 0,
+            size: p.total && p.total > 0 ? p.total : undefined,
+          });
+          return;
+        }
         if (p.error) {
           set({ download: null });
           get().toast(`音源下载失败：${p.error}`, "error");
@@ -760,6 +805,16 @@ export const useStore = create<Store>((set, get) => ({
         });
       })
     );
+
+    // 下载任务状态变化（排队/开始/完成/失败）：直接刷新整份列表，
+    // 列表量很小（几十条），整刷比逐字段 diff 更不容易漏状态
+    await listenEvent<{ taskId: string; status: string; error?: string }>(
+      "download://task",
+      () => {
+        void get().refreshDownloads();
+      }
+    );
+    void get().refreshDownloads();
 
     try {
       const [settings, tracks, folders, playlists, sources, neteaseStatus, qqStatus] = await Promise.all([
@@ -1388,6 +1443,23 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => ({ shuffle: !s.shuffle }));
   },
 
+  /** 把底层的 repeat/shuffle 折叠成单一播放模式。
+   *  随机时 repeat 置 all：next() 靠它决定播完是否回绕，否则随机放完一遍就停。 */
+  playMode() {
+    const { repeat, shuffle } = get();
+    if (shuffle) return "shuffle" as const;
+    if (repeat === "one") return "one" as const;
+    if (repeat === "all") return "all" as const;
+    return "order" as const;
+  },
+
+  setPlayMode(m) {
+    if (m === "shuffle") set({ repeat: "all", shuffle: true });
+    else if (m === "one") set({ repeat: "one", shuffle: false });
+    else if (m === "all") set({ repeat: "all", shuffle: false });
+    else set({ repeat: "off", shuffle: false });
+  },
+
   // ---------- 桌面歌词 ----------
 
   async openDesktopLyrics() {
@@ -1842,6 +1914,110 @@ export const useStore = create<Store>((set, get) => ({
       });
       await get().refreshTracks();
       get().toast(`已下载到本地音乐：${name}`, "success");
+    } catch (e) {
+      get().toast(String(e), "error");
+    }
+  },
+
+  // ---------- 下载管理 ----------
+
+  async refreshDownloads() {
+    try {
+      const tasks = await api.listDownloads("");
+      set({ downloadTasks: tasks });
+    } catch {
+      /* 静默：任务列表拉不到不影响播放 */
+    }
+  },
+
+  /** 进度事件只带 received/total，就地更新单行避免整表重刷 */
+  patchDownloadTask(id: string, patch: { received?: number; size?: number }) {
+    const tasks = get().downloadTasks;
+    const i = tasks.findIndex((t) => t.id === id);
+    if (i < 0) return;
+    const next = tasks.slice();
+    const t = { ...next[i] };
+    if (patch.received !== undefined) t.received = patch.received;
+    if (patch.size !== undefined && patch.size > 0) t.size = patch.size;
+    next[i] = t;
+    set({ downloadTasks: next });
+  },
+
+  setDownloadTab(tab: "done" | "active") {
+    set({ downloadTab: tab });
+  },
+
+  /** 加入下载队列（走 worker 队列，可在下载管理页查看进度） */
+  async enqueueDownload(row: {
+    kind: string;
+    id: string | number;
+    name: string;
+    artist: string;
+    album: string;
+    cover: string;
+    durationMs?: number;
+    mediaMid?: string;
+  }) {
+    try {
+      await api.enqueueDownload({
+        kind: row.kind,
+        id: String(row.id),
+        title: row.name,
+        artist: row.artist,
+        album: row.album,
+        coverUrl: row.cover,
+        durationMs: row.durationMs ?? 0,
+        mediaMid: row.mediaMid ?? "",
+      });
+      await get().refreshDownloads();
+      get().toast("已加入下载队列", "success");
+    } catch (e) {
+      get().toast(String(e), "error");
+    }
+  },
+
+  async retryDownload(taskId: string) {
+    try {
+      await api.retryDownload(taskId);
+      await get().refreshDownloads();
+    } catch (e) {
+      get().toast(String(e), "error");
+    }
+  },
+
+  async deleteDownload(taskId: string, deleteFile: boolean) {
+    try {
+      await api.deleteDownload(taskId, deleteFile);
+      await get().refreshDownloads();
+    } catch (e) {
+      get().toast(String(e), "error");
+    }
+  },
+
+  async clearDownloads(status: "done" | "active" | "all", deleteFiles: boolean) {
+    try {
+      const n = await api.clearDownloads(status, deleteFiles);
+      await get().refreshDownloads();
+      get().toast(n > 0 ? `已清理 ${n} 条记录` : "没有可清理的记录", "success");
+    } catch (e) {
+      get().toast(String(e), "error");
+    }
+  },
+
+  async openDownloadLocation(taskId: string) {
+    try {
+      await api.openDownloadLocation(taskId);
+    } catch (e) {
+      get().toast(String(e), "error");
+    }
+  },
+
+  /** 导出当前页签的记录为 CSV（后端直接写到下载目录并返回路径） */
+  async exportDownloads(status: "done" | "active" | "all") {
+    try {
+      const path = await api.exportDownloads(status);
+      const name = path.split(/[\\/]/).pop() ?? path;
+      get().toast(`已导出：${name}`, "success");
     } catch (e) {
       get().toast(String(e), "error");
     }

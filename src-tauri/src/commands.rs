@@ -1228,7 +1228,7 @@ fn lx_download_blocking(app: AppHandle, req: LxDownloadReq) -> Result<String, St
         if artist.is_empty() { "Unknown" } else { &artist },
         sanitize_filename(&title)
     );
-    let dest = download_to_dir(&app, "lx", &url, &dir, &stem, &ext, &title)?;
+    let dest = download_to_dir(&app, "lx", &url, &dir, &stem, &ext, &title, None)?;
     let name = dest
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -1915,6 +1915,7 @@ fn download_to_dir(
     stem: &str,
     ext: &str,
     progress_key: &str,
+    task_id: Option<&str>,
 ) -> Result<std::path::PathBuf, String> {
     let dest = unique_dest(dir, stem, ext);
     let part = dest.with_extension(format!("{ext}.part"));
@@ -1952,9 +1953,15 @@ fn download_to_dir(
                     } else {
                         0
                     };
+                    // 顺带把进度写进任务表，下载管理页才能显示多条并发任务的进度
+                    if let Some(tid) = task_id {
+                        let st = app.state::<AppState>();
+                        let conn = st.db.lock();
+                        db::update_download_progress(&conn, tid, received as i64, total as i64);
+                    }
                     let _ = app.emit(
                         "download://progress",
-                        json!({ "url": progress_key, "received": received, "total": total, "pct": pct.min(99), "done": false }),
+                        json!({ "url": progress_key, "taskId": task_id, "received": received, "total": total, "pct": pct.min(99), "done": false }),
                     );
                 }
             }
@@ -2043,6 +2050,16 @@ pub async fn download_online(
 }
 
 fn download_online_blocking(app: AppHandle, req: OnlineSaveReq) -> Result<String, String> {
+    download_online_blocking_with_task(app, req, None)
+}
+
+/// 与 `download_online_blocking` 相同，但额外把进度写进下载任务表。
+/// 传 None 时行为与原来完全一致（即时下载，不进任务表）。
+fn download_online_blocking_with_task(
+    app: AppHandle,
+    req: OnlineSaveReq,
+    task_id: Option<String>,
+) -> Result<String, String> {
     let state = app.state::<AppState>();
     let title = req.title.trim().to_string();
     if title.is_empty() {
@@ -2087,7 +2104,7 @@ fn download_online_blocking(app: AppHandle, req: OnlineSaveReq) -> Result<String
         if artist.is_empty() { "Unknown" } else { &artist },
         sanitize_filename(&title)
     );
-    let dest = download_to_dir(&app, &req.kind, &url, &dir, &stem, &ext, &title)?;
+    let dest = download_to_dir(&app, &req.kind, &url, &dir, &stem, &ext, &title, task_id.as_deref())?;
     let name = dest
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -2117,8 +2134,318 @@ fn download_online_blocking(app: AppHandle, req: OnlineSaveReq) -> Result<String
         db::upsert_track(&conn, &track);
         db::mark_online_downloaded(&conn, &req.kind, &req.id);
         let _ = db::add_folder(&conn, &dir.to_string_lossy());
+        // 下载管理页需要真实文件路径（"打开所在位置"与删除文件都靠它）
+        if let Some(tid) = task_id.as_deref() {
+            db::set_download_status(
+                &conn,
+                tid,
+                "done",
+                "",
+                &dest.to_string_lossy(),
+            );
+        }
     }
     Ok(name)
+}
+
+// ---------- 下载管理 ----------
+
+/// 下载任务 id：平台 + 曲目 id，同一首歌重复下载复用同一行
+fn dl_task_id(kind: &str, song_id: &str) -> String {
+    format!("{kind}:{song_id}")
+}
+
+/// 排队中的任务。首次使用时惰性启动固定数量的 worker，
+/// 避免一次点十几首把网络与磁盘打满。
+fn dl_queue() -> &'static parking_lot::Mutex<std::collections::VecDeque<OnlineSaveReq>> {
+    static Q: std::sync::OnceLock<parking_lot::Mutex<std::collections::VecDeque<OnlineSaveReq>>> =
+        std::sync::OnceLock::new();
+    Q.get_or_init(|| parking_lot::Mutex::new(std::collections::VecDeque::new()))
+}
+
+fn ensure_workers(app: &AppHandle) {
+    static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    STARTED.get_or_init(|| {
+        for _ in 0..2 {
+            let app = app.clone();
+            let _ = std::thread::Builder::new()
+                .name("yimai-downloader".into())
+                .spawn(move || loop {
+                    let job = { dl_queue().lock().pop_front() };
+                    let Some(req) = job else {
+                        // 空队列：歇一会儿再看，避免忙等烧 CPU
+                        std::thread::sleep(std::time::Duration::from_millis(400));
+                        continue;
+                    };
+                    run_download_job(app.clone(), req);
+                });
+        }
+    });
+}
+
+/// 执行一个下载任务并回写任务状态
+fn run_download_job(app: AppHandle, req: OnlineSaveReq) {
+    let tid = dl_task_id(&req.kind, &req.id);
+    {
+        let st = app.state::<AppState>();
+        let conn = st.db.lock();
+        db::set_download_status(&conn, &tid, "downloading", "", "");
+    }
+    let _ = app.emit("download://task", json!({ "taskId": tid.clone(), "status": "downloading" }));
+
+    // 直接调用即可：worker 是普通 std 线程（不是运行时线程），
+    // 再套一层 block_on + spawn_blocking 没有意义，还会引入
+    // "在运行时线程内 block_on 会 panic" 的风险。
+    let res = download_online_blocking_with_task(app.clone(), req, Some(tid.clone()));
+
+    let (status, err) = match &res {
+        Ok(_) => ("done", String::new()),
+        Err(e) => ("failed", e.clone()),
+    };
+    {
+        let st = app.state::<AppState>();
+        let conn = st.db.lock();
+        db::set_download_status(&conn, &tid, status, &err, "");
+    }
+    let _ = app.emit(
+        "download://task",
+        json!({ "taskId": tid.clone(), "status": status, "error": err }),
+    );
+}
+
+/// 列出下载任务。status 为空返回全部。
+#[tauri::command]
+pub async fn list_downloads(
+    state: State<'_, AppState>,
+    status: String,
+) -> Result<Vec<crate::db::DownloadTask>, String> {
+    let conn = state.db.lock();
+    Ok(db::list_download_tasks(&conn, &status))
+}
+
+/// 加入下载队列。返回任务 id（失败会落在任务表的 failed 状态里，可重试）。
+#[tauri::command]
+pub async fn enqueue_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    req: OnlineSaveReq,
+) -> Result<String, String> {
+    let tid = dl_task_id(&req.kind, &req.id);
+    let already_done = {
+        let conn = state.db.lock();
+        db::get_download_task(&conn, &tid)
+            .map(|t| t.status == "done")
+            .unwrap_or(false)
+    };
+    if already_done {
+        return Ok(tid); // 已下完，不重复排队
+    }
+    {
+        let conn = state.db.lock();
+        let task = crate::db::DownloadTask {
+            id: tid.clone(),
+            kind: req.kind.clone(),
+            song_id: req.id.clone(),
+            media_mid: req.media_mid.clone(),
+            title: req.title.clone(),
+            artist: req.artist.clone(),
+            album: req.album.clone(),
+            cover: req.cover_url.clone(),
+            size: 0,
+            received: 0,
+            status: "queued".into(),
+            error: String::new(),
+            file_path: String::new(),
+            created_at: db::now_secs(),
+            finished_at: 0,
+        };
+        db::upsert_download_task(&conn, &task);
+    }
+    ensure_workers(&app);
+    dl_queue().lock().push_back(req);
+    let _ = app.emit("download://task", json!({ "taskId": tid.clone(), "status": "queued" }));
+    Ok(tid)
+}
+
+/// 重试：任务重置为 queued 并重新入队
+#[tauri::command]
+pub async fn retry_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<(), String> {
+    let req = {
+        let conn = state.db.lock();
+        let Some(t) = db::get_download_task(&conn, &task_id) else {
+            return Err("任务不存在".into());
+        };
+        db::set_download_status(&conn, &task_id, "queued", "", "");
+        OnlineSaveReq {
+            kind: t.kind,
+            id: t.song_id,
+            title: t.title,
+            artist: t.artist,
+            album: t.album,
+            cover_url: t.cover,
+            duration_ms: 0,
+            media_mid: t.media_mid,
+        }
+    };
+    ensure_workers(&app);
+    dl_queue().lock().push_back(req);
+    let _ = app.emit("download://task", json!({ "taskId": task_id.clone(), "status": "queued" }));
+    Ok(())
+}
+
+/// 删除单个任务。delete_file 为 true 时同时删掉磁盘上的音频。
+#[tauri::command]
+pub async fn delete_download(
+    state: State<'_, AppState>,
+    task_id: String,
+    delete_file: bool,
+) -> Result<(), String> {
+    let conn = state.db.lock();
+    db::delete_download_task(&conn, &task_id, delete_file);
+    Ok(())
+}
+
+/// 清空某个状态的全部任务。返回被清理的记录数。
+#[tauri::command]
+pub async fn clear_downloads(
+    state: State<'_, AppState>,
+    status: String,
+    delete_files: bool,
+) -> Result<usize, String> {
+    let conn = state.db.lock();
+    let before = db::list_download_tasks(&conn, &status).len();
+    db::clear_download_tasks(&conn, &status, delete_files);
+    Ok(before)
+}
+
+/// 在资源管理器中定位已下载的音频
+#[tauri::command]
+pub async fn open_download_location(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<(), String> {
+    let path = {
+        let conn = state.db.lock();
+        db::get_download_task(&conn, &task_id)
+            .map(|t| t.file_path)
+            .unwrap_or_default()
+    };
+    if path.is_empty() || !std::path::Path::new(&path).exists() {
+        return Err("文件不存在或已移动".into());
+    }
+    std::process::Command::new("explorer")
+        .arg(format!("/select,\"{path}\""))
+        .spawn()
+        .map_err(|e| format!("打开资源管理器失败: {e}"))?;
+    Ok(())
+}
+
+/// 导出任务列表为 CSV，直接落到下载目录并返回文件路径。
+/// 刻意不在前端拼路径：前端拿到的 default 与 save_dir() 在用户设过自定义
+/// 目录时并不一致，交给后端自己写既不会拼错，也没有任意路径写入的口子。
+#[tauri::command]
+pub async fn export_downloads(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    status: String,
+) -> Result<String, String> {
+    let csv = {
+        let conn = state.db.lock();
+        build_downloads_csv(&conn, &status)?
+    };
+    let dir = save_dir(&state);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建下载目录失败: {e}"))?;
+    let name = format!(
+        "YimaiMusic-下载记录-{}.csv",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    );
+    let path = dir.join(&name);
+    std::fs::write(&path, csv).map_err(|e| format!("写入失败: {e}"))?;
+    let _ = app.emit("download://exported", json!({ "path": path.to_string_lossy() }));
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn build_downloads_csv(conn: &rusqlite::Connection, status: &str) -> Result<String, String> {
+    let tasks = db::list_download_tasks(conn, status);
+    if tasks.is_empty() {
+        return Err("没有可导出的记录".into());
+    }
+    let esc = |t: &str| -> String {
+        if t.contains([',', '"', '\n']) {
+            format!("\"{}\"", t.replace('"', "\"\""))
+        } else {
+            t.to_string()
+        }
+    };
+    let mut out = String::from("歌名,歌手,专辑,大小(字节),状态,完成时间\n");
+    for t in &tasks {
+        let time = if t.finished_at > 0 {
+            fmt_unix(t.finished_at)
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            "{},{},{},{},{},{}\n",
+            esc(&t.title),
+            esc(&t.artist),
+            esc(&t.album),
+            t.size,
+            t.status,
+            time
+        ));
+    }
+    Ok(out)
+}
+
+/// unix 秒 → "YYYY-MM-DD HH:MM"（为一个格式化函数引入 chrono 不划算）
+fn fmt_unix(ts: i64) -> String {
+    let mut d = ts / 86400;
+    let secs = ts.rem_euclid(86400);
+    let mut year = 1970i64;
+    loop {
+        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+        let yd = if leap { 366 } else { 365 };
+        if d < yd {
+            break;
+        }
+        d -= yd;
+        year += 1;
+    }
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let ml = [
+        31i64,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut month = 0usize;
+    while month < 12 && d >= ml[month] {
+        d -= ml[month];
+        month += 1;
+    }
+    format!(
+        "{}-{:02}-{:02} {:02}:{:02}",
+        year,
+        month + 1,
+        d + 1,
+        secs / 3600,
+        (secs % 3600) / 60
+    )
 }
 
 /// “我喜欢”列表：在线条目部分

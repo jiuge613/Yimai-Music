@@ -16,6 +16,7 @@ import SettingsView from "./views/SettingsView";
 import RankingView from "./views/RankingView";
 import OnlineLibraryView from "./views/NeteaseView";
 import ArtistAlbumView from "./views/ArtistAlbumView";
+import DownloadView from "./views/DownloadView";
 import { coverSrc } from "./api";
 import { extractColor } from "./utils";
 import { skinImage, skinUri } from "./skins";
@@ -272,6 +273,7 @@ export default function App() {
               {view === "recent" && <LibraryView mode="recent" />}
               {view === "playlist" && <PlaylistDetail id={viewParam} />}
               {view === "detail" && <ArtistAlbumView kind={detailKind} />}
+              {view === "downloads" && <DownloadView />}
               {view === "sources" && <SourcesView />}
               {view === "ranking" && <RankingView />}
               {view === "netease" && <OnlineLibraryView source="netease" />}

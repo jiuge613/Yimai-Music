@@ -1,6 +1,6 @@
 [package]
 name = "yimai"
-version = "1.0.2"
+version = "1.1.0"
 description = "Yimai Music - 精美的高性能音乐播放器"
 authors = ["Yimai Music"]
 license = "Apache-2.0"

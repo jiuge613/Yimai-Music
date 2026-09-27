@@ -1,8 +1,10 @@
 import {
+  Check,
   ChevronUp,
   Download,
   Heart,
   ListMusic,
+  ListOrdered,
   Pause,
   Play,
   Repeat,
@@ -19,8 +21,18 @@ import { useStore } from "../store";
 import CoverImg from "./CoverImg";
 import Slider from "./Slider";
 import { activeLyricText, fmtTime } from "../utils";
+import type { PlayMode } from "../types";
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
+
+/** 播放模式：竖排浮层，四选一；按钮图标取当前项。
+ *  措辞按参考图：顺序播放 / 循环播放 / 单曲循环 / 随机播放。 */
+const PLAY_MODES: { key: PlayMode; label: string; icon: typeof Repeat }[] = [
+  { key: "order", label: "顺序播放", icon: ListOrdered },
+  { key: "all", label: "循环播放", icon: Repeat },
+  { key: "one", label: "单曲循环", icon: Repeat1 },
+  { key: "shuffle", label: "随机播放", icon: Shuffle },
+];
 
 /** 左侧文案：未打开播放页时显示当前歌词行（随 pos 换行，溢出走 marquee），否则曲名。
  *  pos 是 250ms 一帧的高频更新——隔离在这个小组件里，播放条主体不再每帧重渲染 */
@@ -210,6 +222,10 @@ export default function PlayerBar({ centered = false }: { centered?: boolean }) 
   const speed = useStore((s) => s.speed);
   const repeat = useStore((s) => s.repeat);
   const shuffle = useStore((s) => s.shuffle);
+  // 模式按钮：把 repeat/shuffle 折叠成一个四选一，订阅底层两值即可推导
+  const mode: PlayMode = shuffle ? "shuffle" : repeat === "one" ? "one" : repeat === "all" ? "all" : "order";
+  const setPlayMode = useStore((s) => s.setPlayMode);
+  const [modeOpen, setModeOpen] = useState(false);
   const download = useStore((s) => s.download);
   const queue = useStore((s) => s.queue);
   const queueOpen = useStore((s) => s.queueOpen);
@@ -230,8 +246,6 @@ export default function PlayerBar({ centered = false }: { centered?: boolean }) 
   const muted = useStore((s) => s.muted);
   const toggleMute = useStore((s) => s.toggleMute);
   const setSpeed = useStore((s) => s.setSpeed);
-  const setRepeat = useStore((s) => s.setRepeat);
-  const toggleShuffle = useStore((s) => s.toggleShuffle);
   const toggleLike = useStore((s) => s.toggleLike);
   const setNowPlayingOpen = useStore((s) => s.setNowPlayingOpen);
   const setQueueOpen = useStore((s) => s.setQueueOpen);
@@ -391,13 +405,6 @@ export default function PlayerBar({ centered = false }: { centered?: boolean }) 
         {/* 中部控制（内容总高 40+16+4=60px，在 64px 条高内垂直居中） */}
         <div className="flex-1 flex flex-col items-center justify-center gap-1 min-w-0">
           <div className="flex items-center gap-4">
-            <button
-              className={`btn-ghost w-[30px] h-[30px] ${shuffle ? "!text-[var(--accent)]" : ""}`}
-              onClick={toggleShuffle}
-              title="随机播放"
-            >
-              <Shuffle size={15} />
-            </button>
             <button className="btn-ghost w-[30px] h-[30px]" onClick={prev} title="上一首">
               <SkipBack size={16} className="fill-current" />
             </button>
@@ -419,15 +426,72 @@ export default function PlayerBar({ centered = false }: { centered?: boolean }) 
             <button className="btn-ghost w-[30px] h-[30px]" onClick={() => next(false)} title="下一首">
               <SkipForward size={16} className="fill-current" />
             </button>
-            <button
-              className={`btn-ghost w-[30px] h-[30px] ${repeat !== "off" ? "!text-[var(--accent)]" : ""}`}
-              onClick={() =>
-                setRepeat(repeat === "off" ? "all" : repeat === "all" ? "one" : "off")
-              }
-              title={repeat === "off" ? "列表循环" : repeat === "all" ? "单曲循环" : "关闭循环"}
-            >
-              {repeat === "one" ? <Repeat1 size={15} /> : <Repeat size={15} />}
-            </button>
+
+            {/* 播放模式：循环与随机合并为一个按钮，点开在浮层里四选一 */}
+            <div className="relative flex items-center">
+              <button
+                className={`btn-ghost w-[30px] h-[30px] ${mode !== "order" ? "!text-[var(--accent)]" : ""}`}
+                onClick={() => setModeOpen((v) => !v)}
+                aria-expanded={modeOpen}
+                title={`播放模式：${PLAY_MODES.find((m) => m.key === mode)?.label}`}
+              >
+                {(() => {
+                  const Icon =
+                    PLAY_MODES.find((m) => m.key === mode)?.icon ?? ListOrdered;
+                  return <Icon size={15} />;
+                })()}
+              </button>
+              {modeOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-[60]"
+                    onClick={() => setModeOpen(false)}
+                  />
+                  <div
+                    className="absolute bottom-[34px] left-1/2 -translate-x-1/2 z-[61] w-[152px] rounded-2xl py-1.5"
+                    style={{
+                      background: "var(--bar-glass)",
+                      backdropFilter: "blur(var(--bar-blur, 12px)) saturate(1.2)",
+                      border: "1px solid var(--bar-line)",
+                      boxShadow: "var(--bar-shadow)",
+                    }}
+                  >
+                    {PLAY_MODES.map((m) => {
+                      const Icon = m.icon;
+                      const on = m.key === mode;
+                      return (
+                        <button
+                          key={m.key}
+                          onClick={() => {
+                            setPlayMode(m.key);
+                            setModeOpen(false);
+                          }}
+                          className={`w-full px-3 h-9 flex items-center gap-2.5 text-[12.5px] transition-colors ${
+                            on
+                              ? "text-[var(--accent-strong)] font-semibold"
+                              : "text-[var(--ink-2)] hover:text-[var(--ink)]"
+                          }`}
+                        >
+                          <Icon
+                            size={15}
+                            strokeWidth={1.9}
+                            className={on ? "text-[var(--accent)]" : "text-[var(--ink-3)]"}
+                          />
+                          {m.label}
+                          {on && (
+                            <Check
+                              size={13}
+                              className="ml-auto text-[var(--accent)]"
+                              strokeWidth={2.6}
+                            />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
           <Playhead fallbackTotal={current?.durationMs ?? 0} />
         </div>
