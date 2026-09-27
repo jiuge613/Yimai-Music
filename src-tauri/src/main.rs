@@ -244,35 +244,60 @@ fn device_watcher(app: AppHandle) {
         .default_output_device()
         .and_then(|d| d.name().ok())
         .unwrap_or_default();
+    // 上次切换是否失败。失败后要继续重试：设备名没变不代表设备可用，
+    // 0x8889000A 这类"设备无效"往往在几秒内自愈，放弃重试就永远无声了。
+    let mut retry_at: Option<std::time::Instant> = None;
+    let mut retry_count: u32 = 0;
     loop {
         std::thread::sleep(std::time::Duration::from_secs(2));
         let now_default: String = rodio::cpal::default_host()
             .default_output_device()
             .and_then(|d| d.name().ok())
             .unwrap_or_default();
-        if now_default == last_default || now_default.is_empty() {
+        let name_changed = now_default != last_default && !now_default.is_empty();
+        let due = retry_at.map(|t| std::time::Instant::now() >= t).unwrap_or(false);
+        if !name_changed && !due {
             continue;
         }
-        last_default = now_default.clone();
-        // 用户固定了设备（且该设备仍存在）时不打扰；跟随系统则自动切换
-        if let Some(pref) = eng.device_preference() {
-            let still_there = rodio::cpal::default_host()
-                .output_devices()
-                .map(|mut ds| {
-                    ds.any(|d| d.name().ok().as_deref() == Some(pref.as_str()))
-                })
-                .unwrap_or(false);
-            if still_there {
-                continue;
+        if name_changed {
+            last_default = now_default.clone();
+            // 用户固定了设备（且该设备仍存在）时不打扰；跟随系统则自动切换
+            if let Some(pref) = eng.device_preference() {
+                let still_there = rodio::cpal::default_host()
+                    .output_devices()
+                    .map(|mut ds| {
+                        ds.any(|d| d.name().ok().as_deref() == Some(pref.as_str()))
+                    })
+                    .unwrap_or(false);
+                if still_there {
+                    continue;
+                }
+                crate::elog!("[engine] 固定设备「{pref}」已不存在，跟随系统默认");
             }
-            eprintln!("[engine] 固定设备「{pref}」已不存在，跟随系统默认");
+            crate::elog!("[engine] 默认输出设备变更 → 切到 {now_default}");
+        } else {
+            crate::elog!("[engine] 重试恢复输出设备");
         }
-        eprintln!("[engine] 默认输出设备变更 → 切到 {now_default}");
-        if eng.switch_output_device(None).is_ok() {
-            let _ = app.emit(
-                "device://changed",
-                serde_json::json!({ "current": eng.current_device_name() }),
-            );
+        match eng.switch_output_device(None) {
+            Ok(()) => {
+                retry_at = None;
+                retry_count = 0;
+                if name_changed {
+                    let _ = app.emit(
+                        "device://changed",
+                        serde_json::json!({ "current": eng.current_device_name() }),
+                    );
+                }
+            }
+            Err(e) => {
+                // 退避重试：连续失败时逐步拉长间隔，上限 30s，
+                // 避免设备长期不可用时每 2s 刷一次日志。
+                let secs: u64 = (retry_count as u64 * 2).clamp(2, 30);
+                retry_count = retry_count.saturating_add(1);
+                retry_at =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(secs));
+                crate::elog!("[engine] 切换输出设备失败，{secs}s 后重试: {e}");
+            }
         }
     }
 }

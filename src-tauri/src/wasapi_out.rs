@@ -232,7 +232,7 @@ fn pick_device(pref: Option<&str>) -> Result<wasapi::Device, String> {
                 return Ok(dev);
             }
         }
-        eprintln!("[wasapi] 未找到输出设备「{name}」，回退系统默认");
+        crate::elog!("[wasapi] 未找到输出设备「{name}」，回退系统默认");
     }
     wasapi::get_default_device(&Direction::Render)
         .map_err(|e| wasapi_err("没有可用的音频输出设备", e.as_ref()))
@@ -308,7 +308,7 @@ fn try_initialize(
                     return Err((client, msg));
                 }
             };
-            eprintln!(
+            crate::elog!(
                 "[wasapi] 周期未对齐（0x88890019），文档恢复：对齐周期 {aligned}（{:.2}ms）",
                 aligned as f64 / 10_000.0
             );
@@ -438,7 +438,7 @@ where
                     Ok((final_fmt, client)) => {
                         audio_client = client;
                         inited = Some((final_fmt, fmt_spec, ratio));
-                        eprintln!(
+                        crate::elog!(
                             "[wasapi] 独占格式就绪：源 {}Hz → 设备 {}Hz × {}ch，{} 字节/帧，有效 {} 位",
                             params.src_rate, rate, ch, blockalign, valid_bits
                         );
@@ -484,7 +484,7 @@ where
         })?;
         // 初始化完成：立即回传结果（引擎据此决定独占或回退共享），随后进入喂采样循环
         let _ = tx.send(Ok(()));
-        eprintln!(
+        crate::elog!(
             "[wasapi] 独占播放：{}Hz × {}ch，{} 字节/帧，重采样比 {:.3}",
             dev_rate, ch, blockalign, rate_ratio,
         );
@@ -506,7 +506,7 @@ where
             .get_bufferframecount()
             .map_err(|e| wasapi_err("独占模式获取缓冲大小失败", e.as_ref()))?
             as usize;
-        eprintln!("[wasapi] 独占缓冲 = {buffer_frames} 帧/周期");
+        crate::elog!("[wasapi] 独占缓冲 = {buffer_frames} 帧/周期");
         loop {
             if stop.load(Ordering::Relaxed) {
                 break;

@@ -790,7 +790,17 @@ export const useStore = create<Store>((set, get) => ({
         }
         if (p.error) {
           set({ download: null });
-          get().toast(`音源下载失败：${p.error}`, "error");
+          // 后端在"下载成功但播放失败"时也复用这个事件。设备类错误不是
+          // 下载问题，报成"音源下载失败"会把用户引向错误方向。
+          if (
+            /打开输出设备失败|创建播放通道失败|枚举输出设备失败|没有可用的音频输出设备|输出设备|独占|0x8889/.test(
+              p.error,
+            )
+          ) {
+            get().toast(`音频输出设备打开失败，请检查声卡：${p.error}`, "error");
+          } else {
+            get().toast(`音源下载失败：${p.error}`, "error");
+          }
           return;
         }
         if (p.done) {
@@ -1198,11 +1208,32 @@ export const useStore = create<Store>((set, get) => ({
      *  只有真永久失败（无版权/下架/信息失效）才置灰；
      *  VIP/权益不足随登录与会员状态可恢复，网络错误是瞬时的——都不标记，
      *  下次仍会尝试。登录过期则整个队列都会失败：立即停止并提示重新登录，
-     *  不再连跳刷屏。 */
+     *  不再连跳刷屏。
+     *
+     *  音频设备故障是另一回事：跟这首歌无关，换下一首同样打不开。
+     *  此时必须停，不能连跳——否则整队列被跳完、计数归零，界面回到
+     *  "什么都没发生"，用户完全不知道是声卡出了问题。 */
     const fail = (msg: string) => {
       const needRelogin = /登录已过期|请重新登录|未登录/.test(msg);
-      const permanent = !needRelogin && /无版权|下架|已失效|信息失效/.test(msg);
+      // 后端 is_device_error 的前端对应：打开输出设备/枚举/独占相关
+      const deviceFail =
+        /打开输出设备失败|创建播放通道失败|枚举输出设备失败|没有可用的音频输出设备|输出设备|独占|0x8889/.test(
+          msg,
+        );
+      const permanent = !needRelogin && !deviceFail && /无版权|下架|已失效|信息失效/.test(msg);
       const key = `${item.kind}:${item.id}`;
+      if (deviceFail) {
+        // 设备故障：提示指向声卡而不是歌曲，并且不跳下一首
+        const prev = get().failToastId;
+        if (prev != null) get().dismissToast(prev);
+        set({
+          failToastId: get().toast(
+            `音频输出设备打开失败，请检查声卡是否被其他程序占用：${msg}`,
+            "error",
+          ),
+        });
+        return;
+      }
       set((s) => ({
         unavailable: permanent
           ? { ...s.unavailable, [key]: msg }

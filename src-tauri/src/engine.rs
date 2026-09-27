@@ -174,7 +174,11 @@ impl Output {
     fn empty(&self) -> bool {
         match self {
             Output::Shared(s) => s.empty(),
-            Output::Exclusive(c) => !c.active.load(Ordering::Relaxed),
+            // 会话线程已退出 = 已经没有采样源在跑，必须当"空"处理，
+            // 否则 monitor 会一直以为还在播放，进度条也停在原地。
+            Output::Exclusive(c) => {
+                !c.active.load(Ordering::Relaxed) || c.exited.load(Ordering::Relaxed)
+            }
         }
     }
     /// 音量/倍速对独占无效：会话线程直接读引擎共享的原子量，
@@ -190,8 +194,19 @@ impl Output {
             ))),
         }
     }
+    /// 独占后端是否真的还在跑。
+    ///
+    /// 必须同时看 `exited`：设备被拔出/被系统抢占时，会话线程会自行结束，
+    /// 但 `Output` 里仍然是 `Exclusive` 变体。此时若仍报 true，
+    /// start_backend 会一直尝试"重建共享流"（而设备其实已经交还），
+    /// 设置页也会显示一个并不存在的独占会话。
     fn is_exclusive(&self) -> bool {
-        matches!(self, Output::Exclusive(_))
+        match self {
+            Output::Shared(_) => false,
+            Output::Exclusive(c) => {
+                c.active.load(Ordering::Relaxed) && !c.exited.load(Ordering::Relaxed)
+            }
+        }
     }
 }
 
@@ -332,6 +347,52 @@ impl Engine {
         Ok((leaked_handle, sink))
     }
 
+    /// 打开输出流，带短重试与"偏好设备 → 系统默认"降级。
+    ///
+    /// 设备刚插上、刚被别的程序独占、或从休眠唤醒时，WASAPI 会以
+    /// 0x8889000A(AUDCLNT_E_DEVICE_INVALIDATED) 拒绝打开共享流。这类失败
+    /// 往往是瞬时的：重开一次流就成功。此前 build_output 失败即整首放弃，
+    /// 而 start() 在 emit 之前就返回，表现为"点了没反应、界面永远未在播放"。
+    fn build_output_resilient(
+        pref: Option<&str>,
+    ) -> Result<(&'static OutputStreamHandle, Sink), String> {
+        // 第一次失败后重试两次。间隔取 120/350ms：够设备从"刚被别的程序
+        // 抢占"里恢复，又不至于让界面明显卡顿。
+        const RETRY_DELAYS_MS: [u64; 2] = [120, 350];
+        let mut last_err = String::new();
+        for (i, delay) in std::iter::once(0u64).chain(RETRY_DELAYS_MS).enumerate() {
+            if delay > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(delay));
+            }
+            match Self::build_output(pref) {
+                Ok(v) => {
+                    if i > 0 {
+                        crate::elog!(
+                            "[engine] 输出设备第 {} 次重试后恢复 pref={:?}",
+                            i,
+                            pref
+                        );
+                    }
+                    return Ok(v);
+                }
+                Err(e) => {
+                    crate::elog!("[engine] 打开输出设备失败(第{}次) pref={:?} err={e}", i + 1, pref);
+                    last_err = e;
+                }
+            }
+        }
+        // 用户指定的设备反复打不开：降级到系统默认再试一次。
+        // 蓝牙耳机/USB DAC 断开时"记住的设备"会失效，此时跟着系统走
+        // 远好过彻底无声。
+        if pref.is_some() {
+            crate::elog!("[engine] 偏好设备不可用，降级到系统默认设备");
+            if let Ok(v) = Self::build_output_resilient(None) {
+                return Ok(v);
+            }
+        }
+        Err(format!("{last_err}（已重试并尝试系统默认设备）"))
+    }
+
     /// 当前使用的输出设备名
     pub fn current_device_name(&self) -> String {
         // cpal 无"stream 绑定的设备"查询；按偏好返回，无偏好时取系统默认
@@ -364,11 +425,12 @@ impl Engine {
             let volume = f32::from_bits(self.volume.load(Ordering::Relaxed));
             let speed = f32::from_bits(self.speed.load(Ordering::Relaxed));
 
-            self.set_device_preference(name);
-
+            // 注意：偏好只在成功打开设备后才落库。提前写入的话，一次
+            // 失败就会把偏好永久改成打不开的设备，之后每次播放都去撞它。
             // 独占会话的源由线程独占持有，设备切换时不能"原地搬到新设备"，
             // 统一重建为共享后端并从当前进度续播（独占会在下次开播时重新建立）。
-            let (handle, sink) = Self::build_output(name)?;
+            let (handle, sink) = Self::build_output_resilient(name)?;
+            self.set_device_preference(name);
             {
                 let mut old = self.output.write();
                 // 先等独占会话真正退出、设备交还系统，再建共享流，否则无声
@@ -407,7 +469,7 @@ impl Engine {
                             self.stopped.store(false, Ordering::Relaxed);
                         }
                         Err(e) => {
-                            eprintln!("[engine] 切换设备后重开音频失败: {e}");
+                            crate::elog!("[engine] 切换设备后重开音频失败: {e}");
                         }
                     }
                 }
@@ -465,7 +527,15 @@ impl Engine {
             };
             Ok(EqSource::new(inner, self.eq.clone(), self.pos_ms.clone()))
         };
-        let wrapped = build()?;
+        let wrapped = match build() {
+            Ok(w) => w,
+            Err(e) => {
+                // 这一步在下面的埋点之前，历史上失败时完全静默：
+                // 日志里只剩"下载完成"而没有任何后续，排查时看不出死在哪。
+                crate::elog!("[engine] 解码失败 kind={} path={} err={e}", info.kind, info.path);
+                return Err(e);
+            }
+        };
         let diag_sr = wrapped.sample_rate();
         let diag_ch = wrapped.channels();
         let diag_dur = wrapped.total_duration();
@@ -477,16 +547,29 @@ impl Engine {
         self.switching.store(true, Ordering::Relaxed);
         let result = self.start_backend(wrapped, build, diag_sr);
         self.switching.store(false, Ordering::Relaxed);
-        if let Err(e) = &result {
-            crate::logfile::write(&format!(
+        if let Err(e) = result {
+            crate::elog!(
                 "[engine] start 失败 kind={} path={} err={e}",
-                info.kind, info.path
-            ));
+                info.kind,
+                info.path
+            );
+            // 失败时后端可能已被 stop/clear 成空，但 current 还指着上一首。
+            // 不清掉的话界面会继续显示旧曲目、进度条照走，表现为"点了没反应"。
+            // 发 playing=false 让前端把状态归位。
+            self.stopped.store(true, Ordering::Relaxed);
+            self.user_paused.store(false, Ordering::Relaxed);
+            let seq = self.play_seq.fetch_add(1, Ordering::Relaxed) + 1;
+            let ps = PlayState {
+                playing: false,
+                info,
+                seq,
+            };
+            let _ = self.app.emit("player://state", ps);
+            return Err(e);
         }
-        result?;
         self.user_paused.store(false, Ordering::Relaxed);
         self.stopped.store(false, Ordering::Relaxed);
-        crate::logfile::write(&format!(
+        crate::elog!(
             "[engine] started kind={} title={:?} path={} sr={} ch={} dur={}ms exclusive={}",
             info.kind,
             info.title,
@@ -495,7 +578,7 @@ impl Engine {
             diag_ch,
             info.duration_ms,
             self.is_exclusive_active(),
-        ));
+        );
         *self.current.write() = Some(info.clone());
         self.notify_smtc();
         let seq = self.play_seq.fetch_add(1, Ordering::Relaxed) + 1;
@@ -538,12 +621,12 @@ impl Engine {
                             return Ok(());
                         }
                         Ok(Err(e)) => {
-                            eprintln!("[engine] 独占模式不可用，已回退普通模式: {e}");
+                            crate::elog!("[engine] 独占模式不可用，已回退普通模式: {e}");
                             *self.exclusive_retry_at.write() =
                                 Some(std::time::Instant::now() + EXCLUSIVE_RETRY_COOLDOWN);
                         }
                         Err(_) => {
-                            eprintln!("[engine] 独占模式初始化超时，已回退普通模式");
+                            crate::elog!("[engine] 独占模式初始化超时，已回退普通模式");
                             crate::wasapi_out::wait_session_exit(&ctl, EXCLUSIVE_EXIT_TIMEOUT_MS);
                             *self.exclusive_retry_at.write() =
                                 Some(std::time::Instant::now() + EXCLUSIVE_RETRY_COOLDOWN);
@@ -551,7 +634,7 @@ impl Engine {
                     }
                 }
                 Err(e) => {
-                    eprintln!("[engine] 无法启动独占会话: {e}");
+                    crate::elog!("[engine] 无法启动独占会话: {e}");
                     *self.exclusive_retry_at.write() =
                         Some(std::time::Instant::now() + EXCLUSIVE_RETRY_COOLDOWN);
                 }
@@ -559,7 +642,7 @@ impl Engine {
             // 独占失败：源已被会话取走或从未使用，重新构建一份走共享
             let src = rebuild()?;
             let pref = self.device_pref.read().clone();
-            let (handle, sink) = Self::build_output(pref.as_deref())?;
+            let (handle, sink) = Self::build_output_resilient(pref.as_deref())?;
             let mut out = self.output.write();
             out.stop();
             *out = Output::Shared(sink);
@@ -574,7 +657,7 @@ impl Engine {
         // 共享模式：按需把后端切回共享
         if self.output.read().is_exclusive() {
             let pref = self.device_pref.read().clone();
-            let (handle, sink) = Self::build_output(pref.as_deref())?;
+            let (handle, sink) = Self::build_output_resilient(pref.as_deref())?;
             let mut out = self.output.write();
             // 先等独占会话真正退出、设备交还系统，再建共享流，否则无声
             out.stop();
@@ -931,9 +1014,15 @@ impl Engine {
             }
             self.want_clear();
             // 解码失败说明缓存内容不是有效音频（例如误把网页/接口响应存成了缓存）：
-            // 删除坏缓存，否则后续每次播放都会命中同一份坏文件
+            // 删除坏缓存，否则后续每次播放都会命中同一份坏文件。
+            // 但设备类失败（打不开输出设备）时文件本身是好的，删掉等于让用户
+            // 白白重新下载一遍，且下次仍会失败 —— 这类错误只上报、不删。
             if let Err(e) = self.play_file(info) {
-                let _ = std::fs::remove_file(&cache);
+                if is_device_error(&e) {
+                    crate::elog!("[engine] 设备错误，保留缓存 key={key} err={e}");
+                } else {
+                    let _ = std::fs::remove_file(&cache);
+                }
                 return Err(e);
             }
             return Ok(());
@@ -979,16 +1068,20 @@ impl Engine {
                             info.duration_ms = probe_duration(&cache);
                         }
                         // 下载成功但解码失败 = 内容不是有效音频（多半是网页/接口响应），
-                        // 删除坏缓存并上报错误，避免坏文件常驻缓存被反复命中
+                        // 删除坏缓存并上报错误，避免坏文件常驻缓存被反复命中。
+                        // 设备类失败则保留：文件是好的，删了下次还得重下。
                         match engine.play_file(info) {
                             Ok(()) => crate::logfile::write(&format!(
                                 "[engine] 缓存命中开播成功 key={key}"
                             )),
                             Err(e) => {
-                                crate::logfile::write(&format!(
-                                    "[engine] 缓存解码失败 key={key} err={e}"
-                                ));
-                                let _ = std::fs::remove_file(&cache);
+                                let device_err = is_device_error(&e);
+                                crate::elog!(
+                                    "[engine] 缓存解码失败 key={key} 设备错误={device_err} err={e}"
+                                );
+                                if !device_err {
+                                    let _ = std::fs::remove_file(&cache);
+                                }
                                 let _ = app.emit(
                                     "download://progress",
                                     serde_json::json!({ "url": url, "done": true, "error": e }),
@@ -1111,6 +1204,21 @@ impl Engine {
             }
         }
     }
+}
+
+/// 判定一个播放错误是否属于"音频输出设备"问题。
+///
+/// 这类错误与音源本身无关：文件可能完全正常，只是声卡被别的程序抢占、
+/// 刚插上还没就绪、或从休眠唤醒。调用方据此避免删掉已下好的缓存，
+/// 前端也据此提示"检查声卡"而不是"该歌曲不可用"。
+fn is_device_error(msg: &str) -> bool {
+    msg.contains("打开输出设备失败")
+        || msg.contains("创建播放通道失败")
+        || msg.contains("枚举输出设备失败")
+        || msg.contains("没有可用的音频输出设备")
+        || msg.contains("输出设备")
+        || msg.contains("独占")
+        || msg.contains("0x8889")
 }
 
 fn probe_duration(path: &Path) -> u64 {
@@ -1249,4 +1357,29 @@ fn db_lookup_source(
         |r| Ok((r.get(0)?, r.get(1)?)),
     )
     .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_device_error;
+
+    /// 设备类错误必须与音源类错误区分开：判错会导致已下载好的音频被删除，
+    /// 用户不得不重新下载，而重新下载后依然失败（因为问题在声卡）。
+    #[test]
+    fn device_errors_are_recognized() {
+        assert!(is_device_error("打开输出设备失败: A backend-specific error: 0x8889000A"));
+        assert!(is_device_error("创建播放通道失败: xxx"));
+        assert!(is_device_error("没有可用的音频输出设备"));
+        assert!(is_device_error("输出设备「Speakers」不存在"));
+        assert!(is_device_error("打开输出设备失败（已重试并尝试系统默认设备）"));
+    }
+
+    #[test]
+    fn content_errors_are_not_device_errors() {
+        // 这些错才允许删缓存
+        assert!(!is_device_error("无法解码该音频文件: missing header"));
+        assert!(!is_device_error("打开文件失败: 系统找不到指定的文件"));
+        assert!(!is_device_error("该歌曲暂无版权"));
+        assert!(!is_device_error("下载失败: connection reset"));
+    }
 }
