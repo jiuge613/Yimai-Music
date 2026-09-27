@@ -65,7 +65,9 @@
    这里将对比度直接预调进各阴影/渐变值。 */
 html[data-theme="light"] {
   --bg: #eef1f7;
-  --ink: #1e2735;
+  /* 主文字用纯黑：原 #1e2735 是带蓝调的哑光黑，在浅色玻璃面板上偏灰、
+     显脏。纯黑与其后的 --ink-2/--ink-3 次级灰拉开层次，正文更利落。 */
+  --ink: #000000;
   --ink-2: #4d5a6d;
   /* 同理实测：最亮壁纸合成后背景约 0.92 亮度，此值对比度 5.1:1 */
   --ink-3: #5d6a7d;
@@ -513,6 +515,65 @@ html[data-theme="light"][data-skin="on"] .glass {
 }
 .nav-item:hover > svg {
   transform: scale(1.12);
+}
+
+/* ---------- 侧栏导航渐变态 ----------
+   选中：蓝 → 红 → 紫；悬停：红 → 橙 → 黄。
+   两条渐变一冷一暖、一深一浅，悬停态明显"更亮"——这样指针扫过侧栏
+   就能立刻看出落点，而不用等选中态。
+   文字/图标颜色随背景明度切换：深底用白字，亮底（红橙黄）用深棕字，
+   任何强调色/主题下都保证可读。 */
+.nav-item.nav-active {
+  background-image: linear-gradient(
+    100deg,
+    #2f6bf0 0%,
+    #d92f6b 52%,
+    #8b3ff0 100%
+  );
+  background-color: transparent;
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 6px 18px -6px rgba(120, 60, 220, 0.6);
+}
+.nav-item.nav-active > svg,
+.nav-item.nav-active .nav-bar {
+  color: #fff;
+  background: #fff;
+}
+.nav-item.nav-active .nav-count {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+/* 悬停盖过选中：任何一项被指针扫到都走红→橙→黄 */
+.nav-item:hover {
+  background-image: linear-gradient(
+    100deg,
+    #e8382f 0%,
+    #f5851f 52%,
+    #f7c948 100%
+  );
+  background-color: transparent;
+  border-color: transparent;
+  color: #34190a;
+  box-shadow: 0 6px 18px -6px rgba(226, 116, 22, 0.55);
+}
+.nav-item:hover > svg,
+.nav-item.nav-active:hover > svg {
+  color: #34190a;
+}
+.nav-item:hover .nav-bar,
+.nav-item.nav-active:hover .nav-bar {
+  background: #34190a;
+}
+.nav-item:hover .nav-count,
+.nav-item.nav-active:hover .nav-count {
+  color: rgba(52, 25, 10, 0.75);
+}
+
+/* 渐变态下禁用滑入高光（半透明白会蒙在彩色渐变上显脏） */
+.nav-item.nav-active::before,
+.nav-item:hover::before {
+  opacity: 0;
 }
 
 /* Apple Music 式歌词行：切换行时的字号/字重/透明/缩放平滑过渡；

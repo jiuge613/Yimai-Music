@@ -133,32 +133,20 @@ export default function Sidebar() {
                 onClick={() => setView(key)}
                 className={`nav-item relative h-11 pl-4 pr-3 rounded-xl flex items-center gap-3.5 text-[13.5px] transition-all duration-200 ${
                   active
-                    ? "text-[var(--ink)] font-semibold"
-                    : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
+                    ? "nav-active font-semibold"
+                    : "text-[var(--ink-2)]"
                 }`}
-                style={
-                  active
-                    ? {
-                        background: "var(--accent-weak)",
-                        border: "1px solid var(--accent-weak)",
-                      }
-                    : { border: "1px solid transparent" }
-                }
+                style={{ border: "1px solid transparent" }}
               >
                 {active && (
                   <span
-                    className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full"
-                    style={{ background: "var(--accent)" }}
+                    className="nav-bar absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full"
                   />
                 )}
-                <Icon
-                  size={17}
-                  strokeWidth={1.9}
-                  className={active ? "text-[var(--accent)]" : ""}
-                />
+                <Icon size={17} strokeWidth={1.9} />
                 {label}
                 {key === "liked" && likedCount > 0 && (
-                  <span className="ml-auto text-[11.5px] text-[var(--ink-3)] tabular-nums">
+                  <span className="nav-count ml-auto text-[11.5px] text-[var(--ink-3)] tabular-nums">
                     {likedCount}
                   </span>
                 )}
@@ -174,22 +162,15 @@ export default function Sidebar() {
             aria-expanded={moreOpen}
             className={`nav-item relative h-11 pl-4 pr-3 rounded-xl flex items-center gap-3.5 text-[13.5px] transition-all duration-200 ${
               moreActive
-                ? "text-[var(--ink)] font-semibold"
-                : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
+                ? "nav-active font-semibold"
+                : "text-[var(--ink-2)]"
             }`}
             style={{ border: "1px solid transparent" }}
           >
             {moreActive && (
-              <span
-                className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full"
-                style={{ background: "var(--accent)" }}
-              />
+              <span className="nav-bar absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full" />
             )}
-            <LayoutGrid
-              size={17}
-              strokeWidth={1.9}
-              className={moreActive ? "text-[var(--accent)]" : ""}
-            />
+            <LayoutGrid size={17} strokeWidth={1.9} />
             更多
             <ChevronDown
               size={15}
@@ -210,29 +191,15 @@ export default function Sidebar() {
                     onClick={() => setView(key)}
                     className={`nav-item relative h-10 pl-[46px] pr-3 rounded-xl flex items-center gap-3 text-[13px] transition-all duration-200 ${
                       active
-                        ? "text-[var(--ink)] font-semibold"
-                        : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
+                        ? "nav-active font-semibold"
+                        : "text-[var(--ink-2)]"
                     }`}
-                    style={
-                      active
-                        ? {
-                            background: "var(--accent-weak)",
-                            border: "1px solid var(--accent-weak)",
-                          }
-                        : { border: "1px solid transparent" }
-                    }
+                    style={{ border: "1px solid transparent" }}
                   >
                     {active && (
-                      <span
-                        className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full"
-                        style={{ background: "var(--accent)" }}
-                      />
+                      <span className="nav-bar absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full" />
                     )}
-                    <Icon
-                      size={15}
-                      strokeWidth={1.9}
-                      className={active ? "text-[var(--accent)]" : "text-[var(--ink-3)]"}
-                    />
+                    <Icon size={15} strokeWidth={1.9} className={active ? "" : "text-[var(--ink-3)]"} />
                     {label}
                   </button>
                 );
@@ -244,21 +211,18 @@ export default function Sidebar() {
                 aria-expanded={platOpen}
                 className={`nav-item relative h-10 pl-[46px] pr-3 rounded-xl flex items-center gap-3 text-[13px] transition-all duration-200 ${
                   platformActive
-                    ? "text-[var(--ink)] font-semibold"
-                    : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
+                    ? "nav-active font-semibold"
+                    : "text-[var(--ink-2)]"
                 }`}
                 style={{ border: "1px solid transparent" }}
               >
                 {platformActive && (
-                  <span
-                    className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full"
-                    style={{ background: "var(--accent)" }}
-                  />
+                  <span className="nav-bar absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full" />
                 )}
                 <Globe
                   size={15}
                   strokeWidth={1.9}
-                  className={platformActive ? "text-[var(--accent)]" : "text-[var(--ink-3)]"}
+                  className={platformActive ? "" : "text-[var(--ink-3)]"}
                 />
                 知名平台
                 <ChevronDown
@@ -278,28 +242,18 @@ export default function Sidebar() {
                       onClick={() => setView(key)}
                       className={`nav-item relative h-10 pl-[72px] pr-3 rounded-xl flex items-center gap-3 text-[12.5px] transition-all duration-200 ${
                         active
-                          ? "text-[var(--ink)] font-semibold"
-                          : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
+                          ? "nav-active font-semibold"
+                          : "text-[var(--ink-2)]"
                       }`}
-                      style={
-                        active
-                          ? {
-                              background: "var(--accent-weak)",
-                              border: "1px solid var(--accent-weak)",
-                            }
-                          : { border: "1px solid transparent" }
-                      }
+                      style={{ border: "1px solid transparent" }}
                     >
                       {active && (
-                        <span
-                          className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full"
-                          style={{ background: "var(--accent)" }}
-                        />
+                        <span className="nav-bar absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full" />
                       )}
                       <Icon
                         size={14}
                         strokeWidth={1.9}
-                        className={active ? "text-[var(--accent)]" : "text-[var(--ink-3)]"}
+                        className={active ? "" : "text-[var(--ink-3)]"}
                       />
                       {label}
                     </button>
@@ -344,17 +298,12 @@ export default function Sidebar() {
                     setMenu({ x: ev.clientX, y: ev.clientY, id: p.id });
                   }}
                   className={`nav-item h-10 pl-4 pr-3 rounded-xl flex items-center gap-3 text-[13px] transition-all cursor-pointer ${
-                    active
-                      ? "bg-[var(--shade-strong)] text-[var(--ink)]"
-                      : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
+                    active ? "nav-active" : "text-[var(--ink-2)]"
                   }`}
                 >
-                  <ListMusic
-                    size={15}
-                    className={active ? "text-[var(--accent)]" : "text-[var(--ink-3)]"}
-                  />
+                  <ListMusic size={15} className={active ? "" : "text-[var(--ink-3)]"} />
                   <span className="truncate">{p.name}</span>
-                  <span className="ml-auto text-[11.5px] text-[var(--ink-3)] tabular-nums">
+                  <span className="nav-count ml-auto text-[11.5px] text-[var(--ink-3)] tabular-nums">
                     {p.entries.length}
                   </span>
                 </div>
@@ -388,9 +337,7 @@ export default function Sidebar() {
           <button
             onClick={() => setView("settings")}
             className={`nav-item flex-1 min-w-0 h-11 px-4 rounded-xl flex items-center gap-3.5 text-[13.5px] transition-all ${
-              view === "settings"
-                ? "bg-[var(--shade-strong)] text-[var(--ink)]"
-                : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
+              view === "settings" ? "nav-active" : "text-[var(--ink-2)]"
             }`}
           >
             <Settings size={17} strokeWidth={1.9} />
@@ -400,9 +347,7 @@ export default function Sidebar() {
             onClick={() => setSkinOpen(true)}
             title="皮肤"
             className={`nav-item h-11 px-3.5 rounded-xl flex items-center gap-2 text-[13.5px] shrink-0 transition-all ${
-              skinOpen
-                ? "bg-[var(--shade-strong)] text-[var(--ink)]"
-                : "text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--shade-hover)]"
+              skinOpen ? "nav-active" : "text-[var(--ink-2)]"
             }`}
           >
             <Palette size={17} strokeWidth={1.9} />
