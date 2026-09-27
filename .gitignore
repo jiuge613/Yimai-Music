@@ -28,3 +28,7 @@ src-tauri/_*.rs
 
 # Test audio files
 /testdata/
+
+# 本地工具/会话状态（含源码快照与绝对路径，绝不入库）
+.mimosa/
+.zcode/

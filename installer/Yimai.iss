@@ -3,7 +3,7 @@
 ;          （等价于: npm run tauri build → 本脚本编译）
 ; 输出: installer\output\Yimai_<版本>_x64-setup.exe
 
-#define MyAppName "Yimai"
+#define MyAppName "Yimai Music"
 #define MyAppExeName "yimai.exe"
 ; 版本号直接取自编译产物的文件版本，与 tauri.conf.json 保持一致
 #define MyAppVersion GetFileVersion("..\src-tauri\target\release\yimai.exe")
@@ -86,7 +86,7 @@ begin
   if (CurPageID = wpReady) and (not IsWebView2Installed) then
   begin
     if MsgBox(
-        '系统未检测到 Microsoft Edge WebView2 运行时，缺少它 Yimai 将无法启动。' + #13#10 + #13#10 +
+        '系统未检测到 Microsoft Edge WebView2 运行时，缺少它 Yimai Music 将无法启动。' + #13#10 + #13#10 +
         '是否现在打开官方下载页面？下载安装完成后，再重新运行本安装程序即可。',
         mbConfirmation, MB_YESNO) = IDYES then
       OpenWebView2Download;

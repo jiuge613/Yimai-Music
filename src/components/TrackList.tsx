@@ -317,7 +317,7 @@ export default function TrackList({
               e.stopPropagation();
               removeTrack(t.id);
             }}
-            title="移出资料库（不删除磁盘文件）"
+            title="移出本地音乐（不删除磁盘文件）"
           >
             <Trash2
               size={15}
@@ -678,9 +678,9 @@ export default function TrackList({
               removeTrack(menu.track.id);
               setMenu(null);
             }}
-            title="从资料库移除这条记录（不删除磁盘文件）"
+            title="从本地音乐移除这条记录（不删除磁盘文件）"
           >
-            <Trash2 size={13} className="text-[var(--ink-2)]" /> 移出资料库
+            <Trash2 size={13} className="text-[var(--ink-2)]" /> 移出本地音乐
           </button>
         </div>,
         document.body

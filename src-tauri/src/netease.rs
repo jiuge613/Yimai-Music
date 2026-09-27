@@ -350,9 +350,15 @@ pub fn song_url(
     if music_u.is_none() {
         return Err("未登录网易云账号，无法获取播放链接，请先扫码登录".into());
     }
+    // 网易云的 br 就是目标码率（bps），各档都真实存在：
+    // 128k / 192k / 256k / 320k / 999k(FLAC)。逐级向下回退，
+    // 保证请求的档位拿不到时至少还能给出可听的下一档。
     let ladder: Vec<i64> = match quality {
         "lossless" => vec![999000, 320000, 128000],
         "standard" => vec![128000],
+        "medium" => vec![192000, 128000],
+        "higher" => vec![256000, 192000, 128000],
+        "high" => vec![320000, 256000, 192000, 128000],
         _ => vec![320000, 128000],
     };
     let mut last_hint = String::from("该歌曲没有可播放的音频");

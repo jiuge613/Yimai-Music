@@ -1,8 +1,8 @@
 [package]
 name = "yimai"
-version = "0.1.13"
-description = "Yimai - 精美的高性能音乐播放器"
-authors = ["Yimai"]
+version = "1.0.0"
+description = "Yimai Music - 精美的高性能音乐播放器"
+authors = ["Yimai Music"]
 license = "Apache-2.0"
 edition = "2021"
 
@@ -36,11 +36,15 @@ num-bigint = "0.4"
 rand = "0.8"
 qrcode = { version = "0.14", default-features = false, features = ["image"] }
 filetime = "0.2"
+# WASAPI 独占输出（src/exclusive.rs，仅 Windows）。用 target 限定，
+# 让非 Windows 平台仍能编译这个 crate。
+wasapi = "0.24"
 
 [target.'cfg(windows)'.dependencies]
 # WebView2 TrySuspend：托盘隐藏时挂起渲染进程回收内存
 webview2-com = "0.38"
-windows = "0.61"
+# Win32_Media_Audio*：独占模式要用的 IAudioClient HRESULT 常量与设备接口
+windows = { version = "0.61", features = ["Win32_Media_Audio", "Win32_Media_Audio_Endpoints"] }
 
 [profile.release]
 lto = true

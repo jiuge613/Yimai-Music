@@ -1,6 +1,9 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type {
+  ExclusiveInfo,
+  ExclusiveProbe,
   Folder,
+  GdStatus,
   LyricsPayload,
   NeteaseTrack,
   Playlist,
@@ -38,6 +41,12 @@ export const api = {
   /** 备用歌词源（兜底）：按「歌名+歌手」搜网易云取最佳匹配歌词，主源无歌词时调用 */
   backupLyric: (title: string, artist: string) =>
     invoke<LyricsPayload>("backup_lyric", { title, artist }),
+  // ---------- GD音乐台 歌词兜底（默认关闭，需用户在设置里自行确认 CC BY-NC 条款） ----------
+  gdLyric: (title: string, artist: string) =>
+    invoke<LyricsPayload>("gd_lyric", { title, artist }),
+  gdStatus: () => invoke<GdStatus>("gd_status"),
+  setGdFallback: (enabled: boolean, base?: string) =>
+    invoke<GdStatus>("set_gd_fallback", { enabled, base: base ?? null }),
   likeTrack: (id: number, liked: boolean) =>
     invoke<void>("like_track", { id, liked }),
   /** 移除本地歌曲记录（仅标记，不删磁盘文件） */
@@ -240,6 +249,12 @@ export const api = {
   setPlayQuality: (quality: string) => invoke<void>("set_play_quality", { quality }),
   setCloseAction: (action: string) => invoke<void>("set_close_action", { action }),
   setAutoUpdate: (enabled: boolean) => invoke<void>("set_auto_update", { enabled }),
+  // ---------- 独占模式（WASAPI 直连声卡） ----------
+  /** 开启下一首生效；关闭则立即交还设备并切回普通模式 */
+  setExclusive: (enabled: boolean) => invoke<ExclusiveInfo>("set_exclusive", { enabled }),
+  getExclusive: () => invoke<ExclusiveInfo>("get_exclusive"),
+  /** 试探当前设备能否独占（不改变用户设置） */
+  probeExclusive: () => invoke<ExclusiveProbe>("probe_exclusive"),
   // ---------- 自动更新（GitHub Release） ----------
   /** 前端就绪后触发一次启动自动检查（结果通过 update://available 事件推送） */
   autoCheckUpdate: () => invoke<void>("auto_check_update"),

@@ -115,6 +115,22 @@ CREATE TABLE IF NOT EXISTS manual_order (
 );
 "#;
 
+/// 查询用索引。放在 migrate() 尾部而不是 SCHEMA 里：
+/// - tracks.removed / online_tracks.last_played 是 migrate 渐进补出来的列，
+///   SCHEMA 先于 migrate 执行，在旧库上建索引会 "no such column" 直接失败；
+/// - playlist_tracks 会被主键重建整表替换，索引必须建在重建之后。
+/// playlist_tracks(playlist_id, kind, online_id, track_id) 的复合主键只能用到首列，
+/// 所以单列 playlist_id 查询和 remove_from_playlist 的
+/// DELETE ... WHERE playlist_id=? AND track_id=? 都需要额外索引兜底。
+const INDEXES: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS idx_tracks_removed ON tracks(removed)",
+    "CREATE INDEX IF NOT EXISTS idx_online_tracks_recent
+       ON online_tracks(last_played DESC) WHERE last_played > 0",
+    "CREATE INDEX IF NOT EXISTS idx_playlist_tracks_pid
+       ON playlist_tracks(playlist_id, position)",
+    "CREATE INDEX IF NOT EXISTS idx_liked_online_kind ON liked_online(kind)",
+];
+
 // playlist_tracks 的 kind/online_id 列为渐进迁移（旧库自动补列）
 pub fn migrate(conn: &Connection) {
     // 逐条补列：列已存在是预期情况（“duplicate column”），必须跳过继续；
@@ -213,25 +229,57 @@ pub fn migrate(conn: &Connection) {
         .map(|sql| sql.contains("PRIMARY KEY (playlist_id, track_id)"))
         .unwrap_or(false);
     if needs_rebuild {
-        let _ = conn.execute_batch(
-            "BEGIN;
-             CREATE TABLE playlist_tracks_new (
+        // 逐句执行并显式控制事务：原先把整段塞进 execute_batch 且忽略返回值，
+        // 一旦 DROP 之后某句失败，事务悬着、旧表已丢，歌单条目会静默消失。
+        // 这里改成 BEGIN → 逐句 → COMMIT，任何一步失败都 ROLLBACK 回旧表。
+        const REBUILD: &[&str] = &[
+            "CREATE TABLE playlist_tracks_new (
                playlist_id INTEGER NOT NULL,
                track_id INTEGER NOT NULL,
                position INTEGER NOT NULL DEFAULT 0,
                kind TEXT NOT NULL DEFAULT 'local',
                online_id TEXT NOT NULL DEFAULT '',
                PRIMARY KEY (playlist_id, kind, online_id, track_id)
-             );
-             INSERT OR IGNORE INTO playlist_tracks_new
+             )",
+            "INSERT OR IGNORE INTO playlist_tracks_new
                (playlist_id, track_id, position, kind, online_id)
              SELECT playlist_id, track_id, position,
                COALESCE(NULLIF(kind, ''), 'local'), COALESCE(online_id, '')
-             FROM playlist_tracks;
-             DROP TABLE playlist_tracks;
-             ALTER TABLE playlist_tracks_new RENAME TO playlist_tracks;
-             COMMIT;",
-        );
+             FROM playlist_tracks",
+            "DROP TABLE playlist_tracks",
+            "ALTER TABLE playlist_tracks_new RENAME TO playlist_tracks",
+        ];
+        if let Err(e) = conn.execute_batch("BEGIN") {
+            eprintln!("[db] playlist_tracks 重建失败（BEGIN）: {e}");
+            return;
+        }
+        let mut failed = None;
+        for stmt in REBUILD {
+            if let Err(e) = conn.execute_batch(stmt) {
+                failed = Some((*stmt, e));
+                break;
+            }
+        }
+        match failed {
+            Some((stmt, e)) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                eprintln!("[db] playlist_tracks 重建失败，已回滚: {e}\n  语句: {stmt}");
+            }
+            None => {
+                if let Err(e) = conn.execute_batch("COMMIT") {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    eprintln!("[db] playlist_tracks 重建提交失败，已回滚: {e}");
+                }
+            }
+        }
+    }
+
+    // 索引最后建：既在补列之后，也在 playlist_tracks 整表重建之后。
+    // 单条失败只记日志不中断——索引缺失只是查询变慢，不该让整个库打不开。
+    for stmt in INDEXES {
+        if let Err(e) = conn.execute_batch(stmt) {
+            eprintln!("[db] 建索引失败（已跳过）: {e}\n  语句: {stmt}");
+        }
     }
 }
 
@@ -347,7 +395,7 @@ pub fn upsert_track(conn: &Connection, t: &NewTrack) {
            ON CONFLICT(path) DO UPDATE SET
              title=?2, artist=?3, album=?4, album_artist=?5, track_no=?6, disc=?7, year=?8,
              duration=?9, format=?10, bitrate=?11, sample_rate=?12, bit_depth=?13,
-             cover=?14, lrc_path=?15, size=?16, mtime=?17, removed=0"#,
+             cover=?14, lrc_path=?15, size=?16, mtime=?17, removed=0, missing=0"#,
         params![
             t.path, t.title, t.artist, t.album, t.album_artist, t.track_no, t.disc, t.year,
             t.duration, t.format, t.bitrate, t.sample_rate, t.bit_depth, t.cover, t.lrc_path,
@@ -557,8 +605,12 @@ pub fn list_playlists(conn: &Connection) -> Vec<Playlist> {
         .map(|rows| rows.filter_map(|r| r.ok()).collect())
         .unwrap_or_default();
 
+    // 一次查完所有歌单的条目再分组，避免"每个歌单查一次"的 N+1
+    let by_playlist = playlist_entries_grouped(conn);
+
     for pl in out.iter_mut() {
-        for e in playlist_entries(conn, pl.id) {
+        let Some(entries) = by_playlist.get(&pl.id) else { continue };
+        for e in entries {
             if pl.cover.is_empty() && !e.cover.is_empty() {
                 pl.cover = e.cover.clone();
             }
@@ -940,10 +992,8 @@ pub struct PlaylistEntryRow {
     pub liked_at: i64,
 }
 
-pub fn playlist_entries(conn: &Connection, pid: i64) -> Vec<PlaylistEntryRow> {
-    let mut stmt = match conn
-        .prepare(
-            "SELECT pt.rowid, pt.kind, pt.track_id, pt.online_id,
+/// 歌单条目的 JOIN 查询。`WHERE` 子句由调用方拼接（单列表按 id 过滤 / 全量分组）。
+const PLAYLIST_ENTRIES_SQL: &str = "SELECT pt.playlist_id, pt.rowid, pt.kind, pt.track_id, pt.online_id,
               COALESCE(t.title, ot.title, '') AS title,
               COALESCE(t.artist, ot.artist, '') AS artist,
               COALESCE(t.album, ot.album, '') AS album,
@@ -957,11 +1007,36 @@ pub fn playlist_entries(conn: &Connection, pid: i64) -> Vec<PlaylistEntryRow> {
              LEFT JOIN tracks t ON pt.kind = 'local' AND t.id = pt.track_id
              LEFT JOIN online_tracks ot ON pt.kind != 'local' AND ot.kind = pt.kind AND ot.rid = pt.online_id
              LEFT JOIN liked l ON pt.kind = 'local' AND l.track_id = pt.track_id
-             LEFT JOIN liked_online lo ON pt.kind != 'local' AND lo.kind = pt.kind AND lo.rid = pt.online_id
-             WHERE pt.playlist_id = ?1
-             ORDER BY pt.position, pt.rowid",
-        )
-    {
+             LEFT JOIN liked_online lo ON pt.kind != 'local' AND lo.kind = pt.kind AND lo.rid = pt.online_id";
+
+/// 把 JOIN 结果行映射成 (playlist_id, PlaylistEntryRow)
+fn map_entry(r: &Row) -> rusqlite::Result<(i64, PlaylistEntryRow)> {
+    Ok((
+        r.get(0)?,
+        PlaylistEntryRow {
+            rowid: r.get(1)?,
+            kind: r.get(2)?,
+            track_id: r.get(3)?,
+            online_id: r.get(4)?,
+            title: r.get(5)?,
+            artist: r.get(6)?,
+            album: r.get(7)?,
+            cover: r.get(8)?,
+            duration: r.get(9)?,
+            media_mid: r.get(10)?,
+            vip: r.get::<_, i64>(11)? != 0,
+            last_played: r.get::<_, i64>(12).unwrap_or(0),
+            liked_at: r.get::<_, i64>(13).unwrap_or(0),
+        },
+    ))
+}
+
+/// 取单个歌单的条目。生产路径走 playlist_entries_grouped（list_playlists 一次查完），
+/// 这里保留给按需单查的场合与测试。
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn playlist_entries(conn: &Connection, pid: i64) -> Vec<PlaylistEntryRow> {
+    let sql = format!("{PLAYLIST_ENTRIES_SQL} WHERE pt.playlist_id = ?1 ORDER BY pt.position, pt.rowid");
+    let mut stmt = match conn.prepare(&sql) {
         Ok(s) => s,
         Err(e) => {
             // 读取失败时明确日志：列表“空但导入成功”这类表象的根因都在这里
@@ -969,25 +1044,39 @@ pub fn playlist_entries(conn: &Connection, pid: i64) -> Vec<PlaylistEntryRow> {
             return vec![];
         }
     };
-    stmt.query_map(params![pid], |r| {
-        Ok(PlaylistEntryRow {
-            rowid: r.get(0)?,
-            kind: r.get(1)?,
-            track_id: r.get(2)?,
-            online_id: r.get(3)?,
-            title: r.get(4)?,
-            artist: r.get(5)?,
-            album: r.get(6)?,
-            cover: r.get(7)?,
-            duration: r.get(8)?,
-            media_mid: r.get(9)?,
-            vip: r.get::<_, i64>(10)? != 0,
-            last_played: r.get::<_, i64>(11).unwrap_or(0),
-            liked_at: r.get::<_, i64>(12).unwrap_or(0),
-        })
-    })
-    .map(|rows| rows.filter_map(|r| r.ok()).collect())
-    .unwrap_or_default()
+    stmt.query_map(params![pid], |r| map_entry(r).map(|(_, e)| e))
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+}
+
+/// 一次查出所有歌单的条目并按 playlist_id 分组。
+/// list_playlists 用它替代”每个歌单查一次”，避免歌单变多时的 N+1。
+fn playlist_entries_grouped(
+    conn: &Connection,
+) -> std::collections::HashMap<i64, Vec<PlaylistEntryRow>> {
+    let mut out: std::collections::HashMap<i64, Vec<PlaylistEntryRow>> =
+        std::collections::HashMap::new();
+    let sql = format!(
+        "{PLAYLIST_ENTRIES_SQL} ORDER BY pt.playlist_id, pt.position, pt.rowid"
+    );
+    let mut stmt = match conn.prepare(&sql) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[db] 读取播放列表条目失败: {e}");
+            return out;
+        }
+    };
+    let rows = match stmt.query_map([], map_entry) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[db] 读取播放列表条目失败: {e}");
+            return out;
+        }
+    };
+    for r in rows.filter_map(|r| r.ok()) {
+        out.entry(r.0).or_default().push(r.1);
+    }
+    out
 }
 
 /// 追加条目到播放列表末尾；已存在（主键冲突）时跳过。

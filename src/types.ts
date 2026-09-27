@@ -279,6 +279,40 @@ export interface SettingsPayload {
   closeAction: "tray" | "exit";
   /** 启动时自动检查 GitHub 更新（默认开启） */
   autoUpdate: boolean;
+  /** WASAPI 独占模式开关（默认关闭） */
+  exclusive: boolean;
+}
+
+/** 独占模式运行状态 */
+export interface ExclusiveInfo {
+  /** 用户开关是否打开 */
+  enabled: boolean;
+  /** 是否真的在跑独占（false = 已回退普通模式） */
+  active: boolean;
+  /** 回退原因（active 为 true 时为 null） */
+  reason: string | null;
+  /** 独占生效时的设备名 */
+  device: string | null;
+  /** 独占生效时协商到的设备采样率 */
+  rate: number | null;
+}
+
+/** 独占能力探测结果 */
+export interface ExclusiveProbe {
+  supported: boolean;
+  device: string | null;
+  rate: number | null;
+  reason: string | null;
+}
+
+/** GD音乐台歌词兜底源配置 */
+export interface GdStatus {
+  /** 是否已开启（默认关闭） */
+  enabled: boolean;
+  /** 接口地址（可配置） */
+  base: string;
+  /** 出处标注，需在界面显示 */
+  attribution: string;
 }
 
 /** GitHub 最新 release 的可安装更新信息 */

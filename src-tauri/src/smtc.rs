@@ -72,8 +72,10 @@ fn run(app: AppHandle, rx: Receiver<SmtcMsg>) {
     };
 
     let config = PlatformConfig {
+        // dbus_name 是对外的标识符（不可见、且被系统媒体面板用来关联会话），
+        // 保持 yimai 不动；只有面向用户的显示名跟着品牌改。
         dbus_name: "yimai",
-        display_name: "Yimai",
+        display_name: "Yimai Music",
         hwnd,
     };
 

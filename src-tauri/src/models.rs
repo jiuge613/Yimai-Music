@@ -191,7 +191,7 @@ pub struct SettingsPayload {
     pub speed: f32,
     pub eq_gains: Vec<f32>,
     pub eq_enabled: bool,
-    /// standard | high | lossless
+    /// standard(128k) | medium(192k) | higher(256k) | high(320k) | lossless(FLAC/WAV)
     pub quality: String,
     /// 音源缓存上限（字节），0 = 不限制
     pub cache_limit: u64,
@@ -199,6 +199,8 @@ pub struct SettingsPayload {
     pub close_action: String,
     /// 启动时自动检查 GitHub 更新（默认开启）
     pub auto_update: bool,
+    /// WASAPI 独占模式开关（默认关闭）
+    pub exclusive: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]

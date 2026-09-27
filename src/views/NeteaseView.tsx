@@ -79,7 +79,12 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
   const importAllPlaylists = useStore((s) => s.importAllPlaylists);
   const toast = useStore((s) => s.toast);
 
-  const [kw, setKw] = useState("");
+  // 搜索词放 store：跳到别的页面再返回时组件会重新挂载，
+  // 组件本地 state 会丢，搜索框和结果列表就回不到原样
+  const onlineKw = useStore((s) => s.onlineKw);
+  const setOnlineKw = useStore((s) => s.setOnlineKw);
+  const kw = onlineKw[source];
+  const setKw = (v: string) => setOnlineKw(source, v);
   const [menu, setMenu] = useState<{ x: number; y: number; row: OnlineRow } | null>(
     null
   );
@@ -924,7 +929,7 @@ function QrLoginModal({
           )}
         </div>
         <div className="text-[10.5px] text-[var(--ink-3)] text-center leading-relaxed max-w-[300px]">
-          登录凭证仅保存在本机设置中，用于按你的账号权益获取播放链接；Yimai
+          登录凭证仅保存在本机设置中，用于按你的账号权益获取播放链接；Yimai Music
           不提供任何绕过会员/版权限制的能力。
         </div>
       </div>

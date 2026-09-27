@@ -122,14 +122,18 @@ function Playhead({ fallbackTotal }: { fallbackTotal: number }) {
   );
 }
 
-/** 竖向音量弹出条（点击音量图标显示，离开自动收起） */
+/** 竖向音量弹出条（点击音量图标显示，离开自动收起）。静音开关放在条下方。 */
 function VolumePopover({
   volume,
+  muted,
   onSet,
+  onToggleMute,
   onClose,
 }: {
   volume: number;
+  muted: boolean;
   onSet: (v: number) => void;
+  onToggleMute: () => void;
   onClose: () => void;
 }) {
   const H = 140;
@@ -144,7 +148,7 @@ function VolumePopover({
       {/* 点击其他区域收起 */}
       <div className="fixed inset-0 z-[60]" onClick={onClose} />
       <div
-        className="absolute bottom-[48px] right-0 z-[61] w-11 rounded-2xl p-2 flex justify-center"
+        className="absolute bottom-[48px] right-0 z-[61] w-11 rounded-2xl p-2 flex flex-col items-center gap-2"
         style={{
           background: "var(--bar-glass)",
           backdropFilter: "blur(var(--bar-blur, 8px))",
@@ -176,6 +180,22 @@ function VolumePopover({
             style={{ top: y }}
           />
         </div>
+        {/* 音量 % 读数 */}
+        <span className="text-[9.5px] tabular-nums text-[var(--ink-3)] leading-none">
+          {Math.round(volume * 100)}
+        </span>
+        {/* 静音开关：取消静音时还原到静音前的档位 */}
+        <button
+          className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${
+            muted
+              ? "!text-[var(--accent)] bg-[var(--accent-weak)]"
+              : "text-[var(--ink-2)] hover:bg-[var(--shade)]"
+          }`}
+          onClick={onToggleMute}
+          title={muted ? "取消静音" : "静音"}
+        >
+          {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+        </button>
       </div>
     </>
   );
@@ -207,6 +227,8 @@ export default function PlayerBar({ centered = false }: { centered?: boolean }) 
   const next = useStore((s) => s.next);
   const prev = useStore((s) => s.prev);
   const setVolume = useStore((s) => s.setVolume);
+  const muted = useStore((s) => s.muted);
+  const toggleMute = useStore((s) => s.toggleMute);
   const setSpeed = useStore((s) => s.setSpeed);
   const setRepeat = useStore((s) => s.setRepeat);
   const toggleShuffle = useStore((s) => s.toggleShuffle);
@@ -214,7 +236,7 @@ export default function PlayerBar({ centered = false }: { centered?: boolean }) 
   const setNowPlayingOpen = useStore((s) => s.setNowPlayingOpen);
   const setQueueOpen = useStore((s) => s.setQueueOpen);
 
-  const VolIcon = volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
+  const VolIcon = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
 
   const [volOpen, setVolOpen] = useState(false);
   const volBtnRef = useRef<HTMLButtonElement>(null);
@@ -432,7 +454,7 @@ export default function PlayerBar({ centered = false }: { centered?: boolean }) 
                     durationMs: current.durationMs,
                   })
                 }
-                title="下载歌曲到资料库"
+                title="下载歌曲到本地音乐"
               >
                 <Download size={16} />
               </button>
@@ -476,14 +498,16 @@ export default function PlayerBar({ centered = false }: { centered?: boolean }) 
               ref={volBtnRef}
               className={`btn-ghost w-9 h-9 shrink-0 ${volOpen ? "!text-[var(--accent)]" : ""}`}
               onClick={() => setVolOpen((v) => !v)}
-              title={volume === 0 ? "取消静音" : "音量"}
+              title={muted ? "已静音（点击打开音量）" : "音量"}
             >
               <VolIcon size={15} />
             </button>
             {volOpen && (
               <VolumePopover
                 volume={volume}
+                muted={muted}
                 onSet={setVolume}
+                onToggleMute={toggleMute}
                 onClose={() => setVolOpen(false)}
               />
             )}

@@ -95,7 +95,7 @@ export default function Sidebar() {
         <Logo size={44} />
         <div className="min-w-0">
           <div className="text-[15px] font-bold tracking-wide leading-tight text-[var(--ink)]">
-            Yimai
+            Yimai Music
           </div>
           <div className="text-[10px] text-[var(--ink-3)] tracking-[0.22em] mt-0.5">
             HI-FI PLAYER

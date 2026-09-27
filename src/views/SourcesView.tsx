@@ -25,7 +25,7 @@ export default function SourcesView() {
         </h1>
         <p className="text-[12.5px] text-[var(--ink-2)] mt-1.5 leading-relaxed">
           添加任意音频文件直链（http/https 的 mp3 / flac / wav / ogg / m4a 等），
-          Yimai 会自动下载缓存后播放。请仅添加你有权使用的音源。
+          Yimai Music 会自动下载缓存后播放。请仅添加你有权使用的音源。
         </p>
 
         <div className="flex gap-2 mt-3.5">

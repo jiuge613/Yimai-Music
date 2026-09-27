@@ -461,6 +461,235 @@ const FIREFLY = `${SVG_HEAD}
 </g>
 </svg>`;
 
+/* ---------- 幽潭：深潭映紫，星子沉浮 ---------- */
+const LUMEN = `${SVG_HEAD}
+<defs>
+<radialGradient id='pool' cx='.32' cy='.66' r='.86' gradientUnits='objectBoundingBox'>
+<stop offset='0' stop-color='#7b3ae0'/><stop offset='.45' stop-color='#2c5a52'/><stop offset='1' stop-color='#08241d'/>
+</radialGradient>
+<radialGradient id='bloom' cx='.5' cy='.5' r='.5'>
+<stop offset='0' stop-color='#b98cff' stop-opacity='.55'/><stop offset='.5' stop-color='#8b5cf0' stop-opacity='.18'/><stop offset='1' stop-color='#8b5cf0' stop-opacity='0'/>
+</radialGradient>
+<linearGradient id='haze' x1='0' y1='0' x2='0' y2='1'>
+<stop offset='0' stop-color='#0d3a2c' stop-opacity='0'/><stop offset='1' stop-color='#0d3a2c' stop-opacity='.5'/>
+</linearGradient>
+</defs>
+<rect width='1600' height='1000' fill='url(#pool)'/>
+<ellipse cx='512' cy='660' rx='470' ry='330' fill='url(#bloom)'/>
+<rect width='1600' height='1000' fill='url(#haze)'/>
+<g fill='#d9c8ff'>
+<circle cx='150' cy='160' r='1.5' opacity='.6'/><circle cx='330' cy='96' r='1.1' opacity='.42'/><circle cx='520' cy='190' r='1.3' opacity='.5'/><circle cx='760' cy='120' r='1' opacity='.38'/><circle cx='980' cy='204' r='1.4' opacity='.55'/><circle cx='1240' cy='110' r='1.2' opacity='.45'/><circle cx='1470' cy='188' r='1.3' opacity='.5'/><circle cx='240' cy='300' r='1.1' opacity='.4'/><circle cx='620' cy='268' r='1' opacity='.35'/><circle cx='1100' cy='330' r='1.2' opacity='.42'/><circle cx='1400' cy='300' r='1' opacity='.36'/>
+</g>
+<g stroke='#9fe6d2' fill='none' stroke-width='2.2' opacity='.22' stroke-linecap='round'>
+<path d='M120 782 Q 400 754 680 786 T 1480 776'/>
+<path d='M180 838 Q 520 812 860 842 T 1400 834'/>
+<path d='M60 898 Q 460 872 900 902 T 1560 890'/>
+</g>
+<path d='M0 726 Q 200 690 400 728 Q 620 768 820 726 Q 1020 684 1220 722 Q 1420 760 1600 718 V1000 H0 Z' fill='#061a16' opacity='.92'/>
+<path d='M0 830 Q 260 800 520 834 Q 800 870 1080 832 Q 1340 796 1600 828 V1000 H0 Z' fill='#04120f'/>
+<g fill='#c4b5ff'>
+<circle cx='420' cy='700' r='10' opacity='.14'/><circle cx='420' cy='700' r='2.4'/>
+<circle cx='700' cy='742' r='12' opacity='.12'/><circle cx='700' cy='742' r='2.8'/>
+<circle cx='1040' cy='694' r='9' opacity='.13'/><circle cx='1040' cy='694' r='2.2'/>
+<circle cx='1300' cy='736' r='11' opacity='.11'/><circle cx='1300' cy='736' r='2.6'/>
+<circle cx='240' cy='758' r='9' opacity='.12'/><circle cx='240' cy='758' r='2.2'/>
+<circle cx='880' cy='712' r='10' opacity='.1'/><circle cx='880' cy='712' r='2.4'/>
+</g>
+</svg>`;
+
+/* ---------- 紫霞：霞光漫卷，银河隐现 ---------- */
+const NEBULA = `${SVG_HEAD}
+<defs>
+<linearGradient id='veil' x1='0' y1='0' x2='0' y2='1'>
+<stop offset='0' stop-color='#2b1440'/><stop offset='.46' stop-color='#5a2470'/><stop offset='.78' stop-color='#a8396b'/><stop offset='1' stop-color='#e0708a'/>
+</linearGradient>
+<radialGradient id='cloud' cx='.5' cy='.5' r='.5'>
+<stop offset='0' stop-color='#ffb9d4' stop-opacity='.5'/><stop offset='.55' stop-color='#e0708a' stop-opacity='.14'/><stop offset='1' stop-color='#e0708a' stop-opacity='0'/>
+</radialGradient>
+<linearGradient id='band' x1='0' y1='0' x2='1' y2='0'>
+<stop offset='0' stop-color='#c7a4ff' stop-opacity='0'/><stop offset='.5' stop-color='#f0d0ff' stop-opacity='.2'/><stop offset='1' stop-color='#c7a4ff' stop-opacity='0'/>
+</linearGradient>
+</defs>
+<rect width='1600' height='1000' fill='url(#veil)'/>
+<rect x='-120' y='180' width='1900' height='200' fill='url(#band)' transform='rotate(-9 800 280)'/>
+<ellipse cx='420' cy='420' rx='420' ry='230' fill='url(#cloud)'/>
+<ellipse cx='1120' cy='540' rx='480' ry='250' fill='url(#cloud)' opacity='.8'/>
+<ellipse cx='820' cy='250' rx='380' ry='170' fill='url(#cloud)' opacity='.55'/>
+<g fill='#ffe6f2'>
+<circle cx='210' cy='120' r='1.4' opacity='.55'/><circle cx='480' cy='70' r='1.1' opacity='.4'/><circle cx='720' cy='150' r='1.3' opacity='.48'/><circle cx='1010' cy='84' r='1' opacity='.35'/><circle cx='1290' cy='160' r='1.4' opacity='.5'/><circle cx='1520' cy='100' r='1.1' opacity='.4'/><circle cx='360' cy='250' r='1' opacity='.32'/><circle cx='880' cy='220' r='1.2' opacity='.4'/><circle cx='1380' cy='290' r='1' opacity='.34'/>
+</g>
+<path d='M0 760 Q 180 726 380 764 Q 600 806 820 762 Q 1040 718 1260 758 Q 1440 792 1600 754 V1000 H0 Z' fill='#2a0f36' opacity='.9'/>
+<path d='M0 862 Q 300 834 620 866 Q 960 900 1300 862 Q 1460 844 1600 860 V1000 H0 Z' fill='#1b0824'/>
+<g stroke='#ffc8dd' stroke-width='3' opacity='.26' stroke-linecap='round'>
+<line x1='300' y1='812' x2='470' y2='812'/><line x1='980' y1='828' x2='1180' y2='828'/><line x1='1300' y1='796' x2='1400' y2='796'/>
+</g>
+</svg>`;
+
+/* ---------- 潮汐：青蓝波纹，圆点浮游 ---------- */
+const TIDE = `${SVG_HEAD}
+<defs>
+<linearGradient id='sea' x1='0' y1='0' x2='0' y2='1'>
+<stop offset='0' stop-color='#123a86'/><stop offset='.5' stop-color='#0f5b7d'/><stop offset='1' stop-color='#0a7f86'/>
+</linearGradient>
+<pattern id='dots' width='52' height='52' patternUnits='userSpaceOnUse'>
+<circle cx='26' cy='26' r='9' fill='#ffffff' opacity='.07'/>
+</pattern>
+<linearGradient id='fade' x1='0' y1='0' x2='0' y2='1'>
+<stop offset='0' stop-color='#0a7f86' stop-opacity='0'/><stop offset='.55' stop-color='#0a7f86' stop-opacity='.18'/><stop offset='1' stop-color='#04303a' stop-opacity='.6'/>
+</linearGradient>
+</defs>
+<rect width='1600' height='1000' fill='url(#sea)'/>
+<rect width='1600' height='1000' fill='url(#dots)'/>
+<rect width='1600' height='1000' fill='url(#fade)'/>
+<g stroke='#bff0f4' fill='none' stroke-width='2.4' opacity='.2' stroke-linecap='round'>
+<path d='M0 700 Q 200 668 400 702 Q 600 736 800 700 Q 1000 664 1200 698 Q 1400 732 1600 696'/>
+<path d='M0 772 Q 240 742 480 776 Q 720 810 960 774 Q 1200 738 1440 770'/>
+<path d='M0 848 Q 220 820 440 852 Q 660 884 880 850 Q 1100 816 1320 848 Q 1460 866 1600 846'/>
+<path d='M0 926 Q 260 900 520 930 Q 780 960 1040 928 Q 1300 896 1600 928'/>
+</g>
+<g fill='#e8fbff'>
+<circle cx='260' cy='676' r='3.2' opacity='.5'/><circle cx='620' cy='748' r='2.6' opacity='.38'/><circle cx='980' cy='690' r='3' opacity='.46'/><circle cx='1340' cy='742' r='2.8' opacity='.4'/><circle cx='420' cy='828' r='3.4' opacity='.44'/><circle cx='840' cy='866' r='2.8' opacity='.36'/><circle cx='1220' cy='820' r='3.2' opacity='.42'/><circle cx='1520' cy='900' r='2.6' opacity='.34'/>
+</g>
+<path d='M0 800 Q 220 776 440 804 Q 660 832 880 800 Q 1100 768 1320 798 Q 1460 816 1600 794 V1000 H0 Z' fill='#05303d' opacity='.88'/>
+<path d='M0 908 Q 300 886 620 912 Q 960 938 1300 910 Q 1440 898 1600 906 V1000 H0 Z' fill='#03222c'/>
+</svg>`;
+
+/* ---------- 余烬：赤壁将燃，余火未熄 ---------- */
+const EMBER = `${SVG_HEAD}
+<defs>
+<linearGradient id='wall' x1='0' y1='0' x2='0' y2='1'>
+<stop offset='0' stop-color='#4a1015'/><stop offset='.42' stop-color='#6e1d28'/><stop offset='.74' stop-color='#a8471c'/><stop offset='1' stop-color='#c9711b'/>
+</linearGradient>
+<radialGradient id='coal' cx='.5' cy='.5' r='.5'>
+<stop offset='0' stop-color='#ffd08a' stop-opacity='.85'/><stop offset='.4' stop-color='#ff8a3c' stop-opacity='.3'/><stop offset='1' stop-color='#ff8a3c' stop-opacity='0'/>
+</radialGradient>
+<linearGradient id='ash' x1='0' y1='0' x2='0' y2='1'>
+<stop offset='0' stop-color='#2c0a0e' stop-opacity='0'/><stop offset='1' stop-color='#2c0a0e' stop-opacity='.55'/>
+</linearGradient>
+</defs>
+<rect width='1600' height='1000' fill='url(#wall)'/>
+<rect width='1600' height='1000' fill='url(#ash)'/>
+<g>
+<ellipse cx='520' cy='800' rx='400' ry='200' fill='url(#coal)'/>
+<ellipse cx='1080' cy='840' rx='320' ry='160' fill='url(#coal)' opacity='.7'/>
+<ellipse cx='800' cy='660' rx='260' ry='130' fill='url(#coal)' opacity='.55'/>
+</g>
+<g fill='#ffd8a0'>
+<circle cx='300' cy='540' r='3' opacity='.6'/><circle cx='470' cy='420' r='2.2' opacity='.45'/><circle cx='700' cy='500' r='2.6' opacity='.5'/><circle cx='880' cy='380' r='2' opacity='.4'/><circle cx='1080' cy='470' r='2.8' opacity='.52'/><circle cx='1290' cy='360' r='2.2' opacity='.44'/><circle cx='1460' cy='500' r='2.6' opacity='.48'/><circle cx='180' cy='640' r='2.4' opacity='.42'/><circle cx='620' cy='620' r='2' opacity='.38'/><circle cx='1000' cy='600' r='2.4' opacity='.44'/><circle cx='1380' cy='640' r='2.2' opacity='.4'/>
+</g>
+<path d='M0 690 L190 606 360 676 540 592 720 668 900 588 1080 664 1270 596 1450 670 1600 616 V1000 H0 Z' fill='#30090c' opacity='.9'/>
+<g stroke='#ff9d4d' stroke-width='2.6' fill='none' opacity='.34' stroke-linecap='round'>
+<path d='M250 706 C 254 660 246 640 258 606'/><path d='M900 690 C 896 646 906 620 898 586'/><path d='M1330 700 C 1336 660 1326 638 1336 604'/>
+</g>
+<path d='M0 886 Q 280 866 560 890 Q 860 916 1160 888 Q 1380 868 1600 888 V1000 H0 Z' fill='#1d0507'/>
+<g fill='#ffb066'>
+<circle cx='420' cy='820' r='6' opacity='.3'/><circle cx='420' cy='820' r='1.6'/>
+<circle cx='760' cy='846' r='7' opacity='.26'/><circle cx='760' cy='846' r='1.8'/>
+<circle cx='1120' cy='818' r='6' opacity='.28'/><circle cx='1120' cy='818' r='1.6'/>
+<circle cx='1420' cy='842' r='5' opacity='.24'/><circle cx='1420' cy='842' r='1.4'/>
+</g>
+</svg>`;
+
+/* ---------- 点阵：墨色经纬，细密灯格 ---------- */
+const MATRIX = `${SVG_HEAD}
+<defs>
+<pattern id='grid' width='40' height='40' patternUnits='userSpaceOnUse'>
+<circle cx='20' cy='20' r='4.2' fill='#e8e8ee' opacity='.26'/>
+</pattern>
+<pattern id='coarse' width='200' height='200' patternUnits='userSpaceOnUse'>
+<circle cx='100' cy='100' r='7' fill='#f0f0f6' opacity='.4'/>
+</pattern>
+<radialGradient id='vign' cx='.5' cy='.45' r='.75' gradientUnits='objectBoundingBox'>
+<stop offset='0' stop-color='#1a1a20' stop-opacity='.2'/><stop offset='1' stop-color='#000000' stop-opacity='.8'/>
+</radialGradient>
+</defs>
+<rect width='1600' height='1000' fill='#000000'/>
+<rect width='1600' height='1000' fill='url(#grid)'/>
+<rect width='1600' height='1000' fill='url(#coarse)'/>
+<g fill='#ffffff'>
+<circle cx='200' cy='200' r='2' opacity='.6'/><circle cx='600' cy='200' r='2' opacity='.46'/><circle cx='1000' cy='200' r='2' opacity='.55'/><circle cx='1400' cy='200' r='2' opacity='.48'/>
+<circle cx='200' cy='600' r='2' opacity='.5'/><circle cx='600' cy='600' r='2' opacity='.6'/><circle cx='1000' cy='600' r='2' opacity='.44'/><circle cx='1400' cy='600' r='2' opacity='.52'/>
+</g>
+<rect width='1600' height='1000' fill='url(#vign)'/>
+<path d='M0 800 Q 260 770 520 802 Q 800 836 1080 800 Q 1340 768 1600 800 V1000 H0 Z' fill='#0a0a0e'/>
+<g stroke='#5c5c6a' stroke-width='2' opacity='.4' fill='none'>
+<line x1='120' y1='856' x2='380' y2='856'/><line x1='520' y1='880' x2='800' y2='880'/><line x1='940' y1='852' x2='1220' y2='852'/><line x1='300' y1='916' x2='600' y2='916'/><line x1='1040' y1='920' x2='1340' y2='920'/>
+</g>
+<g fill='#dfe0ea'>
+<circle cx='300' cy='790' r='5' opacity='.3'/><circle cx='300' cy='790' r='1.4'/>
+<circle cx='700' cy='812' r='6' opacity='.26'/><circle cx='700' cy='812' r='1.6'/>
+<circle cx='1100' cy='788' r='5' opacity='.28'/><circle cx='1100' cy='788' r='1.4'/>
+<circle cx='1440' cy='806' r='4' opacity='.22'/><circle cx='1440' cy='806' r='1.2'/>
+</g>
+</svg>`;
+
+/* ---------- 暖阳：橙轮层叠，光晕渐收 ---------- */
+const HALO = `${SVG_HEAD}
+<defs>
+<linearGradient id='warm' x1='0' y1='0' x2='0' y2='1'>
+<stop offset='0' stop-color='#ffb347'/><stop offset='.5' stop-color='#ff8f2e'/><stop offset='1' stop-color='#e06a26'/>
+</linearGradient>
+<g id='rings' fill='none' stroke='#000000' stroke-opacity='.05' stroke-width='60'>
+<circle cx='0' cy='0' r='1900'/><circle cx='0' cy='0' r='1800'/><circle cx='0' cy='0' r='1700'/>
+<circle cx='0' cy='0' r='1600'/><circle cx='0' cy='0' r='1500'/><circle cx='0' cy='0' r='1400'/>
+<circle cx='0' cy='0' r='1300'/><circle cx='0' cy='0' r='1200'/><circle cx='0' cy='0' r='1100'/>
+</g>
+<radialGradient id='core' cx='.5' cy='.5' r='.5'>
+<stop offset='0' stop-color='#fff3d0' stop-opacity='.95'/><stop offset='.35' stop-color='#ffd98a' stop-opacity='.45'/><stop offset='1' stop-color='#ffd98a' stop-opacity='0'/>
+</radialGradient>
+<linearGradient id='floor' x1='0' y1='0' x2='0' y2='1'>
+<stop offset='0' stop-color='#b8471a' stop-opacity='.4'/><stop offset='1' stop-color='#7d2c10' stop-opacity='.85'/>
+</linearGradient>
+</defs>
+<rect width='1600' height='1000' fill='url(#warm)'/>
+<use href='#rings' transform='translate(300 1180)'/>
+<use href='#rings' transform='translate(1320 40)'/>
+<ellipse cx='300' cy='1180' rx='520' ry='420' fill='url(#core)'/>
+<rect y='700' width='1600' height='300' fill='url(#floor)'/>
+<g stroke='#ffe6bd' stroke-width='3' opacity='.3' fill='none' stroke-linecap='round'>
+<line x1='240' y1='760' x2='520' y2='760'/><line x1='860' y1='790' x2='1180' y2='790'/><line x1='420' y1='832' x2='700' y2='832'/><line x1='1200' y1='856' x2='1460' y2='856'/>
+</g>
+<g fill='#fff1cf'>
+<circle cx='380' cy='750' r='4' opacity='.4'/><circle cx='980' cy='782' r='3.4' opacity='.34'/><circle cx='640' cy='824' r='3' opacity='.3'/><circle cx='1360' cy='848' r='3.6' opacity='.36'/>
+</g>
+</svg>`;
+
+/* ---------- 桃夭：粉紫晨曦，云影低垂 ---------- */
+const DAWN = `${SVG_HEAD}
+<defs>
+<linearGradient id='rose' x1='0' y1='0' x2='0' y2='1'>
+<stop offset='0' stop-color='#f08080'/><stop offset='.42' stop-color='#e077b0'/><stop offset='.78' stop-color='#a86fd8'/><stop offset='1' stop-color='#7a5ad0'/>
+</linearGradient>
+<radialGradient id='sun' cx='.5' cy='.5' r='.5'>
+<stop offset='0' stop-color='#fff0e0' stop-opacity='.9'/><stop offset='.4' stop-color='#ffc9d8' stop-opacity='.35'/><stop offset='1' stop-color='#ffc9d8' stop-opacity='0'/>
+</radialGradient>
+<linearGradient id='veil' x1='0' y1='0' x2='1' y2='0'>
+<stop offset='0' stop-color='#ffffff' stop-opacity='.14'/><stop offset='.5' stop-color='#ffffff' stop-opacity='.04'/><stop offset='1' stop-color='#ffffff' stop-opacity='.12'/>
+</linearGradient>
+</defs>
+<rect width='1600' height='1000' fill='url(#rose)'/>
+<ellipse cx='800' cy='760' rx='420' ry='300' fill='url(#sun)'/>
+<rect width='1600' height='560' fill='url(#veil)'/>
+<g fill='#fff2f8' opacity='.5'>
+<ellipse cx='320' cy='300' rx='170' ry='26'/><ellipse cx='420' cy='286' rx='110' ry='20'/>
+<ellipse cx='1180' cy='400' rx='200' ry='28'/><ellipse cx='1290' cy='386' rx='130' ry='20'/>
+<ellipse cx='760' cy='200' rx='140' ry='22'/>
+</g>
+<g fill='#fff6fb' opacity='.22'>
+<ellipse cx='220' cy='470' rx='240' ry='20'/><ellipse cx='1020' cy='520' rx='280' ry='22'/><ellipse cx='620' cy='580' rx='200' ry='18'/>
+</g>
+<path d='M0 720 Q 200 682 400 722 Q 600 762 800 720 Q 1000 678 1200 716 Q 1400 754 1600 712 V1000 H0 Z' fill='#8b5ec8' opacity='.7'/>
+<path d='M0 840 Q 280 812 560 844 Q 860 878 1160 842 Q 1400 818 1600 840 V1000 H0 Z' fill='#6f4ab0' opacity='.85'/>
+<path d='M0 934 Q 320 914 640 936 Q 960 958 1280 934 Q 1440 922 1600 932 V1000 H0 Z' fill='#5b3b96'/>
+<g fill='#ffe0ee'>
+<circle cx='460' cy='700' r='9' opacity='.3'/><circle cx='460' cy='700' r='2.2'/>
+<circle cx='880' cy='726' r='10' opacity='.26'/><circle cx='880' cy='726' r='2.4'/>
+<circle cx='1240' cy='694' r='8' opacity='.28'/><circle cx='1240' cy='694' r='2'/>
+<circle cx='180' cy='736' r='8' opacity='.24'/><circle cx='180' cy='736' r='2'/>
+</g>
+</svg>`;
+
+
 /** 深色主题纱的快捷构造：自上而下三段压暗 */
 const darkScrim = (a1: number, a2: number, a3: number) =>
   `linear-gradient(180deg, rgba(12,10,18,${a1}) 0%, rgba(12,10,18,${a2}) 55%, rgba(12,10,18,${a3}) 100%)`;
@@ -519,10 +748,44 @@ export const SKINS: Skin[] = [
     scrimDark: darkScrim(0.28, 0.46, 0.56), scrimLight: lightScrim(0.54, 0.66),
   },
   {
-    // 位图皮肤：背景为核心资源（public/skins/xiaomei.jpg），随构建打包进 dist
-    key: "xiaomei", name: "小美", desc: "樱树之下 · 一抹绯色", image: "/skins/xiaomei.jpg",
-    // 原图近黑底、人物居中偏右：深色主题轻压暗即可，浅色主题重提亮保文字
-    scrimDark: darkScrim(0.06, 0.16, 0.3), scrimLight: lightScrim(0.72, 0.82),
+    key: "lumen", name: "幽潭", desc: "深潭映紫 · 星子沉浮", svg: LUMEN,
+    scrimDark: darkScrim(0.18, 0.34, 0.48), scrimLight: lightScrim(0.66, 0.78),
+  },
+  {
+    key: "nebula", name: "紫霞", desc: "霞光漫卷 · 银河隐现", svg: NEBULA,
+    // 中景偏亮：深色主题要压得比极光重一点，浅色主题反向轻提亮
+    scrimDark: darkScrim(0.34, 0.5, 0.6), scrimLight: lightScrim(0.4, 0.54),
+  },
+  {
+    key: "tide", name: "潮汐", desc: "青蓝波纹 · 圆点浮游", svg: TIDE,
+    scrimDark: darkScrim(0.24, 0.42, 0.54), scrimLight: lightScrim(0.56, 0.68),
+  },
+  {
+    key: "ember", name: "余烬", desc: "赤壁将燃 · 余火未熄", svg: EMBER,
+    // 下部火光很亮：深色主题底部重压，浅色主题整段重提亮
+    scrimDark: darkScrim(0.3, 0.5, 0.64), scrimLight: lightScrim(0.5, 0.64),
+  },
+  {
+    key: "matrix", name: "点阵", desc: "墨色经纬 · 细密灯格", svg: MATRIX,
+    // 纯黑底 + 稀疏点阵：几乎不用压暗，浅色主题需重提亮
+    scrimDark: darkScrim(0.08, 0.2, 0.34), scrimLight: lightScrim(0.76, 0.84),
+  },
+  {
+    key: "halo", name: "暖阳", desc: "橙轮层叠 · 光晕渐收", svg: HALO,
+    // 全画面高亮橙：深色主题三段都要压住，浅色主题也需中等提亮
+    scrimDark: darkScrim(0.44, 0.6, 0.7), scrimLight: lightScrim(0.42, 0.56),
+  },
+  {
+    key: "dawn", name: "桃夭", desc: "粉紫晨曦 · 云影低垂", svg: DAWN,
+    scrimDark: darkScrim(0.3, 0.48, 0.6), scrimLight: lightScrim(0.44, 0.58),
+  },
+  {
+    // 位图皮肤：背景为核心资源（public/skins/xiaomei.png），随构建打包进 dist
+    key: "xiaomei", name: "小美", desc: "樱树之下 · 一抹绯色", image: "/skins/xiaomei.png",
+    // 实测：整体偏暗（均亮 48/255），中心人物最亮（均亮 87），四角最暗（37~67）。
+    // 深色主题按左暗右亮的分布轻微压暗即可；浅色主题文字是深色，
+    // 必须重提亮，否则会糊在亮部上。
+    scrimDark: darkScrim(0.08, 0.18, 0.34), scrimLight: lightScrim(0.72, 0.82),
   },
 ];
 

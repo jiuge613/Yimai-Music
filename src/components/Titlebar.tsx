@@ -1,10 +1,13 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, Square, X, Copy } from "lucide-react";
+import { Minus, Square, X, Copy, ChevronLeft } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useStore } from "../store";
 
 export default function Titlebar() {
   const [maximized, setMaximized] = useState(false);
   const win = getCurrentWindow();
+  const canGoBack = useStore((s) => s.navHistory.length > 0);
+  const goBack = useStore((s) => s.goBack);
 
   useEffect(() => {
     let disposed = false;
@@ -30,6 +33,17 @@ export default function Titlebar() {
         data-tauri-drag-region
         className="absolute top-0 left-0 right-0 h-9 z-[54] pointer-events-auto"
       />
+
+      {/* 返回上一层：有返回栈时才出现（逐层返回在线曲库 → 详情 → …） */}
+      {canGoBack && (
+        <button
+          className="titlebar-btn absolute top-0 left-0 w-9 h-9 z-[56] flex items-center justify-center text-[var(--ink-2)] hover:bg-[var(--shade)] hover:text-[var(--ink)] transition-colors"
+          onClick={() => goBack()}
+          title="返回上一层（Alt + ←）"
+        >
+          <ChevronLeft size={16} />
+        </button>
+      )}
 
       {/* 窗口控制按钮（右上角悬浮，压在热区之上、内容区右上角留白处） */}
       <div className="absolute top-0 right-0 flex items-center h-9 z-[56]">

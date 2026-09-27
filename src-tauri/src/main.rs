@@ -4,6 +4,8 @@ mod commands;
 mod db;
 mod engine;
 mod eq;
+mod exclusive;
+mod gdstudio;
 mod kugou;
 mod library;
 mod lyrics;
@@ -32,6 +34,15 @@ pub struct AppState {
     pub webview_suspended: AtomicBool,
     /// 最近一次扫描进度快照（挂起期间 scan://progress 事件会丢，恢复后补发）
     pub scan_last: Mutex<serde_json::Value>,
+    /// 是否已有扫描在跑（配合 scan_pending 合并并发扫描请求）
+    pub scan_active: AtomicBool,
+    /// 扫描期间又收到扫描请求，当前扫描结束后补跑一轮
+    pub scan_pending: AtomicBool,
+    /// 音量/速度待落盘的值（滑块拖动时高频变更，取走即清）。
+    /// 每帧都写 settings 会让拖动全程产生 SQLite 写锁竞争，故改为
+    /// 内存立即生效 + 脏值由 settings_flusher 定时合并落盘。
+    pub pending_volume: Mutex<Option<String>>,
+    pub pending_speed: Mutex<Option<String>>,
 }
 
 fn show_main(app: &AppHandle) {
@@ -265,6 +276,32 @@ fn device_watcher(app: AppHandle) {
     }
 }
 
+/// 定时把待落盘的音量/速度写进 settings。
+/// 滑块拖动时 set_volume/set_speed 每秒可触发数十次，逐次写库会全程占用
+/// 写锁；这里合并成最多每 2 秒一次写入，且取走即清，保证拖动最终值一定落盘。
+fn settings_flusher(app: AppHandle) {
+    loop {
+        std::thread::sleep(Duration::from_secs(2));
+        let Some(st) = app.try_state::<AppState>() else {
+            continue;
+        };
+        // 先取走再写库：set_* 只在内存里放一个值，取走后到下次 flush
+        // 之间的新值会重新置脏，不会被这次写入覆盖
+        let vol = st.pending_volume.lock().take();
+        let spd = st.pending_speed.lock().take();
+        if vol.is_none() && spd.is_none() {
+            continue;
+        }
+        let conn = st.db.lock();
+        if let Some(v) = vol {
+            db::set_setting(&conn, "volume", &v);
+        }
+        if let Some(v) = spd {
+            db::set_setting(&conn, "speed", &v);
+        }
+    }
+}
+
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示主界面", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
@@ -283,7 +320,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id("main-tray")
         .icon(tray_icon)
-        .tooltip("Yimai")
+        .tooltip("Yimai Music")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, ev| match ev.id().as_ref() {
@@ -474,12 +511,22 @@ fn main() {
                 }
             }
 
+            // 恢复独占模式开关。启动时还没有曲目，所以"开启"只登记意图，
+            // 真正的后端切换发生在第一首开播时（与界面提示的"下一首生效"一致）。
+            if db::get_setting(&conn, "exclusive").map(|s| s == "true").unwrap_or(false) {
+                eng.set_exclusive(true).ok();
+            }
+
             app.manage(AppState {
                 db: Mutex::new(conn),
                 engine: Mutex::new(eng),
                 app_data: app_data.clone(),
                 webview_suspended: AtomicBool::new(false),
                 scan_last: Mutex::new(serde_json::json!({ "active": false, "done": 0, "total": 0 })),
+                scan_active: AtomicBool::new(false),
+                scan_pending: AtomicBool::new(false),
+                pending_volume: Mutex::new(None),
+                pending_speed: Mutex::new(None),
             });
 
             let mhandle = handle.clone();
@@ -487,6 +534,9 @@ fn main() {
 
             let dwhandle = handle.clone();
             std::thread::spawn(move || device_watcher(dwhandle));
+
+            let flhandle = handle.clone();
+            std::thread::spawn(move || settings_flusher(flhandle));
 
             setup_tray(&handle)?;
             Ok(())
@@ -504,6 +554,9 @@ fn main() {
             commands::drop_paths,
             commands::get_lyrics,
             commands::backup_lyric,
+            commands::gd_status,
+            commands::set_gd_fallback,
+            commands::gd_lyric,
             commands::like_track,
             commands::list_playlists,
             commands::create_playlist,
@@ -590,6 +643,9 @@ fn main() {
             commands::cancel_update_download,
             commands::install_update,
             commands::set_auto_update,
+            commands::set_exclusive,
+            commands::get_exclusive,
+            commands::probe_exclusive,
             commands::open_url,
         ])
         .run(tauri::generate_context!())

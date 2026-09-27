@@ -293,6 +293,122 @@ pub async fn backup_lyric(
     Ok(LyricsPayload { synced: false, lines: vec![] })
 }
 
+/// 读取 GD音乐台兜底源配置：{ enabled, base, attribution }
+#[tauri::command]
+pub async fn gd_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let conn = state.db.lock();
+    let enabled = db::get_setting(&conn, "gd_enabled")
+        .map(|s| s == "true")
+        .unwrap_or(false);
+    let base = db::get_setting(&conn, "gd_base")
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::gdstudio::DEFAULT_BASE.to_string());
+    Ok(json!({
+        "enabled": enabled,
+        "base": base,
+        "attribution": crate::gdstudio::ATTRIBUTION,
+    }))
+}
+
+/// 开启/关闭 GD音乐台歌词兜底，并可同时改接口地址。
+/// 开启 = 用户确认接受对方 CC BY-NC 条款（见 gdstudio.rs 模块注释）。
+#[tauri::command]
+pub async fn set_gd_fallback(
+    state: State<'_, AppState>,
+    enabled: bool,
+    base: Option<String>,
+) -> Result<serde_json::Value, String> {
+    if let Some(b) = base.as_deref() {
+        // 存之前先校验，避免把内网地址落库后每次调用都被拒
+        let norm = crate::gdstudio::normalize_base(b)?;
+        let conn = state.db.lock();
+        db::set_setting(&conn, "gd_base", &norm);
+    }
+    {
+        let conn = state.db.lock();
+        db::set_setting(&conn, "gd_enabled", if enabled { "true" } else { "false" });
+    }
+    // 直接回读拼装，不去 await 另一个命令（State 跨 await 会让 future 失去 Send）
+    let conn = state.db.lock();
+    let cur_base = db::get_setting(&conn, "gd_base")
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::gdstudio::DEFAULT_BASE.to_string());
+    Ok(json!({
+        "enabled": enabled,
+        "base": cur_base,
+        "attribution": crate::gdstudio::ATTRIBUTION,
+    }))
+}
+
+/// GD音乐台歌词兜底：本地/平台/网易云备用源都没歌词时才走到这里。
+/// 任何失败都静默返回空 payload（不弹错、不阻断播放）。
+#[tauri::command]
+pub async fn gd_lyric(
+    state: State<'_, AppState>,
+    title: String,
+    artist: String,
+) -> Result<LyricsPayload, String> {
+    let empty = LyricsPayload { synced: false, lines: vec![] };
+    let (enabled, base) = {
+        let conn = state.db.lock();
+        (
+            db::get_setting(&conn, "gd_enabled")
+                .map(|s| s == "true")
+                .unwrap_or(false),
+            db::get_setting(&conn, "gd_base")
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| crate::gdstudio::DEFAULT_BASE.to_string()),
+        )
+    };
+    if !enabled {
+        return Ok(empty);
+    }
+    let title = title.trim();
+    if title.is_empty() {
+        return Ok(empty);
+    }
+    let artist = artist.trim();
+    let kw = if artist.is_empty() {
+        title.to_string()
+    } else {
+        format!("{title} {artist}")
+    };
+
+    // 阻塞调用整体挪到 spawn_blocking：两次 HTTP + 解析，别占着异步运行时
+    let base2 = base.clone();
+    let (t2, a2) = (title.to_string(), artist.to_string());
+    let found = tauri::async_runtime::spawn_blocking(move || {
+        let songs = crate::gdstudio::search(&base2, "netease", &kw, 10);
+        let Some(hit) = crate::gdstudio::pick(&songs, &t2, &a2) else {
+            return String::new();
+        };
+        // lyric_id 优先（官方语义），缺失退回 id
+        let id = if hit.lyric_id.trim().is_empty() {
+            hit.id.clone()
+        } else {
+            hit.lyric_id.clone()
+        };
+        let src = if hit.source.trim().is_empty() {
+            "netease".to_string()
+        } else {
+            hit.source.clone()
+        };
+        crate::gdstudio::lyric(&base2, &src, &id)
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .unwrap_or_default();
+
+    if found.trim().is_empty() {
+        return Ok(empty);
+    }
+    let p = lyrics::parse(&found);
+    if p.lines.is_empty() {
+        return Ok(empty);
+    }
+    Ok(LyricsPayload { synced: p.synced, lines: p.lines })
+}
+
 // ---------- 喜欢 / 统计 ----------
 
 #[tauri::command]
@@ -787,7 +903,7 @@ fn builtin_play_song(state: &State<AppState>, req: &LxPlaySongReq) -> Result<(),
         }
         "tx" => {
             let (musicid, musickey) = qq_credential(state)?;
-            let (u, ext) = crate::qq::song_url(
+            let (u, ext, kbps) = crate::qq::song_url(
                 &req.song_id,
                 req.extra.as_deref().unwrap_or(""),
                 &musicid,
@@ -800,7 +916,7 @@ fn builtin_play_song(state: &State<AppState>, req: &LxPlaySongReq) -> Result<(),
                 "qq",
                 req.song_id.clone(),
                 req.extra.clone().unwrap_or_default(),
-                quality_tag(&ext, if quality == "standard" { 128 } else { 320 }),
+                quality_tag(&ext, kbps),
             )
         }
         _ => {
@@ -919,11 +1035,7 @@ pub async fn lx_play_song(
         let conn = state.db.lock();
         db::get_setting(&conn, "quality").unwrap_or_else(|| "high".to_string())
     };
-    let by_setting = match setting.as_str() {
-        "lossless" | "flac" | "sq" => "flac",
-        "standard" | "normal" | "lq" => "128k",
-        _ => "320k",
-    };
+    let by_setting = lx_quality(&setting);
     let want = req.quality.clone().filter(|q| !q.is_empty()).unwrap_or_else(|| by_setting.to_string());
     let quality = {
         let src_item = LxSourceItem {
@@ -1033,9 +1145,17 @@ pub async fn lx_lyric(
 #[tauri::command]
 pub async fn lx_download(
     app: AppHandle,
-    state: State<'_, AppState>,
     req: LxDownloadReq,
 ) -> Result<String, String> {
+    // 同 download_online：整段是阻塞 IO（取链 HTTP + 落盘 + 写标签），
+    // 不能占用 async 运行时的 worker
+    tauri::async_runtime::spawn_blocking(move || lx_download_blocking(app, req))
+        .await
+        .map_err(|e| format!("下载任务异常终止: {e}"))?
+}
+
+fn lx_download_blocking(app: AppHandle, req: LxDownloadReq) -> Result<String, String> {
+    let state = app.state::<AppState>();
     let title = req.title.trim().to_string();
     if title.is_empty() {
         return Err("歌曲标题为空".into());
@@ -1071,11 +1191,7 @@ pub async fn lx_download(
         let conn = state.db.lock();
         db::get_setting(&conn, "quality").unwrap_or_else(|| "high".to_string())
     };
-    let by_setting = match setting.as_str() {
-        "lossless" | "flac" | "sq" => "flac",
-        "standard" | "normal" | "lq" => "128k",
-        _ => "320k",
-    };
+    let by_setting = lx_quality(&setting);
     let quality = {
         let src_item = LxSourceItem {
             id: req.source_id,
@@ -1103,61 +1219,20 @@ pub async fn lx_download(
     // 扩展名：从直链路径推断，失败兜底 mp3
     let ext = ext_from_url(&url);
 
-    // 下载到保存目录
+    // 下载到保存目录（写 .part → 校验 → 改名，不覆盖已有曲目）
     let dir = save_dir(&state);
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建保存目录失败: {e}"))?;
     let artist = sanitize_filename(&req.artist);
-    let name = format!(
-        "{} - {}.{}",
+    let stem = format!(
+        "{} - {}",
         if artist.is_empty() { "Unknown" } else { &artist },
-        sanitize_filename(&title),
-        ext
+        sanitize_filename(&title)
     );
-    let dest = dir.join(&name);
-    let mut file = std::fs::File::create(&dest).map_err(|e| format!("创建文件失败: {e}"))?;
-    let (total, reader) = http_get_for("lx", &url)?;
-    let mut reader = reader.take(128 * 1024 * 1024);
-    let mut buf = [0u8; 64 * 1024];
-    let mut received: u64 = 0;
-    let mut last_emit = std::time::Instant::now();
-    let mut emitted = false;
-    // 分块读取并回报进度（与 download_online 同款 download://progress 事件）
-    let dl = (|| -> Result<(), String> {
-        loop {
-            let n = reader.read(&mut buf).map_err(|e| format!("下载失败: {e}"))?;
-            if n == 0 {
-                break;
-            }
-            file.write_all(&buf[..n])
-                .map_err(|e| format!("写入文件失败: {e}"))?;
-            received += n as u64;
-            if last_emit.elapsed() >= std::time::Duration::from_millis(300) {
-                last_emit = std::time::Instant::now();
-                emitted = true;
-                let pct = if total > 0 {
-                    ((received as f64 / total as f64) * 100.0) as u64
-                } else {
-                    0
-                };
-                let _ = app.emit(
-                    "download://progress",
-                    json!({ "url": &title, "received": received, "total": total, "pct": pct.min(99), "done": false }),
-                );
-            }
-        }
-        Ok(())
-    })();
-    drop(file);
-    if let Err(e) = dl {
-        if emitted {
-            let _ = app.emit("download://progress", json!({ "url": &title, "done": true }));
-        }
-        return Err(e);
-    }
-    let _ = app.emit(
-        "download://progress",
-        json!({ "url": &title, "received": received, "total": if total == 0 { received } else { total }, "pct": 100, "done": true }),
-    );
+    let dest = download_to_dir(&app, "lx", &url, &dir, &stem, &ext, &title)?;
+    let name = dest
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
 
     // 歌词：尝试回查，失败静默（部分源无 lyric 端点）
     let lyrics = lxsource::lyric(&base, &platform, &req.song_id).ok();
@@ -1291,9 +1366,22 @@ fn quality_tag(ext: &str, br_kbps: i64) -> String {
     }
 }
 
-fn netease_cookie(state: &State<AppState>) -> Option<String> {
+fn netease_cookie(state: &AppState) -> Option<String> {
     let conn = state.db.lock();
     db::get_setting(&conn, "netease_music_u").filter(|s| !s.is_empty())
+}
+
+/// 应用内音质档位 → LX 音源协议的 quality 字符串。
+/// LX 的 url.php 接受 128k/192k/256k/320k/flac；pick_quality 会在音源
+/// 不声明该档时自动降到它支持的最近一档，所以这里可以直接透传。
+fn lx_quality(quality: &str) -> &'static str {
+    match quality {
+        "standard" => "128k",
+        "medium" => "192k",
+        "higher" => "256k",
+        "lossless" => "flac",
+        _ => "320k",
+    }
 }
 
 #[tauri::command]
@@ -1453,6 +1541,9 @@ pub async fn netease_logout(state: State<'_, AppState>) -> Result<(), String> {
     let conn = state.db.lock();
     db::set_setting(&conn, "netease_music_u", "");
     db::set_setting(&conn, "netease_nickname", "");
+    // uid 也必须清：netease_user_playlists 会优先用它取歌单，
+    // 留着旧 uid 会让"已登出"的用户仍能拉到上一个账号的歌单
+    db::set_setting(&conn, "netease_uid", "");
     Ok(())
 }
 
@@ -1478,7 +1569,7 @@ pub struct QqPlayReq {
     pub vip: bool,
 }
 
-fn qq_credential(state: &State<AppState>) -> Result<(String, String), String> {
+fn qq_credential(state: &AppState) -> Result<(String, String), String> {
     let (musicid, musickey) = {
         let conn = state.db.lock();
         (
@@ -1511,9 +1602,10 @@ pub async fn qq_play(
         let conn = state.db.lock();
         db::get_setting(&conn, "quality").unwrap_or_else(|| "high".to_string())
     };
-    let (url, ext) =
+    let (url, ext, kbps) =
         crate::qq::song_url(&track.songmid, &track.media_mid, &musicid, &musickey, &quality, track.vip)?;
-    let quality_label = quality_tag(&ext, if quality == "standard" { 128 } else { 320 });
+    // 用接口实际返回的档位，QQ 无 192/256 档时会显示真实的 320K
+    let quality_label = quality_tag(&ext, kbps);
     // 封面优先用数据库存的完整 URL（歌单导入时已写入），缺失再拼 album_mid
     let cover = {
         let conn = state.db.lock();
@@ -1758,7 +1850,7 @@ pub struct LxDownloadReq {
     pub extra: Option<String>,
 }
 
-fn save_dir(state: &State<AppState>) -> std::path::PathBuf {
+fn save_dir(state: &AppState) -> std::path::PathBuf {
     let conn = state.db.lock();
     let custom = db::get_setting(&conn, "save_dir").unwrap_or_default();
     if custom.is_empty() {
@@ -1780,6 +1872,123 @@ fn sanitize_filename(s: &str) -> String {
         .collect::<String>()
         .trim()
         .to_string()
+}
+
+/// 单个下载的体积上限。超过说明取链返回的不是正常音频（常见是接口 JSON /
+/// 网页被当成了直链），继续写只会产出被截断的坏文件。
+const MAX_DOWNLOAD_BYTES: u64 = 128 * 1024 * 1024;
+
+/// 目标文件已存在时追加 " (1)"、" (2)" …，绝不覆盖已有曲目。
+/// 原先直接 File::create 目标名，同名同扩展名的文件会被静默截断。
+fn unique_dest(dir: &std::path::Path, stem: &str, ext: &str) -> std::path::PathBuf {
+    let first = if ext.is_empty() {
+        dir.join(stem)
+    } else {
+        dir.join(format!("{stem}.{ext}"))
+    };
+    if !first.exists() {
+        return first;
+    }
+    for i in 1..1000 {
+        let cand = if ext.is_empty() {
+            dir.join(format!("{stem} ({i})"))
+        } else {
+            dir.join(format!("{stem} ({i}).{ext}"))
+        };
+        if !cand.exists() {
+            return cand;
+        }
+    }
+    first
+}
+
+/// 下载音频到保存目录：先写 .part，全部校验通过再改名成成品。
+/// 修掉三处问题：
+/// - 直接写目标名会静默覆盖已有曲目 → unique_dest 改名避让
+/// - 失败时半截文件留在保存目录，下次扫描会把它当坏曲目收进资料库 → 失败清理
+/// - 超过体积上限时 take() 会"正常"结束，产出被截断的伪成功文件 → 显式判错
+fn download_to_dir(
+    app: &AppHandle,
+    kind: &str,
+    url: &str,
+    dir: &std::path::Path,
+    stem: &str,
+    ext: &str,
+    progress_key: &str,
+) -> Result<std::path::PathBuf, String> {
+    let dest = unique_dest(dir, stem, ext);
+    let part = dest.with_extension(format!("{ext}.part"));
+    let mut emitted = false;
+
+    let received: u64 = {
+        let mut last_emit = std::time::Instant::now();
+        let run = (|| -> Result<u64, String> {
+            let (total, reader) = http_get_for(kind, url)?;
+            // +1 是为了能察觉"刚好超过上限"：取上限本身再读一次
+            let mut reader = reader.take(MAX_DOWNLOAD_BYTES + 1);
+            let mut file =
+                std::fs::File::create(&part).map_err(|e| format!("创建文件失败: {e}"))?;
+            let mut buf = [0u8; 64 * 1024];
+            let mut received: u64 = 0;
+            loop {
+                let n = reader.read(&mut buf).map_err(|e| format!("下载失败: {e}"))?;
+                if n == 0 {
+                    break;
+                }
+                file.write_all(&buf[..n])
+                    .map_err(|e| format!("写入文件失败: {e}"))?;
+                received += n as u64;
+                if received > MAX_DOWNLOAD_BYTES {
+                    return Err(format!(
+                        "文件超过 {}MB 上限，已中止（取链返回的可能是非音频内容）",
+                        MAX_DOWNLOAD_BYTES / 1024 / 1024
+                    ));
+                }
+                if last_emit.elapsed() >= std::time::Duration::from_millis(300) {
+                    last_emit = std::time::Instant::now();
+                    emitted = true;
+                    let pct = if total > 0 {
+                        ((received as f64 / total as f64) * 100.0) as u64
+                    } else {
+                        0
+                    };
+                    let _ = app.emit(
+                        "download://progress",
+                        json!({ "url": progress_key, "received": received, "total": total, "pct": pct.min(99), "done": false }),
+                    );
+                }
+            }
+            drop(file);
+            // 服务端给了 content-length 就必须下满，否则是断流而非正常结束
+            if total > 0 && received < total {
+                return Err(format!(
+                    "下载不完整（收到 {received} 字节，应为 {total} 字节），请重试"
+                ));
+            }
+            Ok(received)
+        })();
+        match run {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = std::fs::remove_file(&part);
+                // 发过进度就先把进度条收掉，避免卡在 99%
+                if emitted {
+                    let _ = app.emit(
+                        "download://progress",
+                        json!({ "url": progress_key, "done": true }),
+                    );
+                }
+                return Err(e);
+            }
+        }
+    };
+
+    std::fs::rename(&part, &dest).map_err(|e| format!("保存文件失败: {e}"))?;
+    let _ = app.emit(
+        "download://progress",
+        json!({ "url": progress_key, "received": received, "pct": 100, "done": true }),
+    );
+    Ok(dest)
 }
 
 /// 收藏在线歌曲到“我喜欢”（轻量引用，不下载；播放时按权益取链接）
@@ -1823,9 +2032,18 @@ pub async fn like_online(
 #[tauri::command]
 pub async fn download_online(
     app: AppHandle,
-    state: State<'_, AppState>,
     req: OnlineSaveReq,
 ) -> Result<String, String> {
+    // 全流程都是阻塞 IO（多次 HTTP + 整文件落盘 + lofty 解析 + 写标签），
+    // 放 async 命令里会占住运行时工作线程数分钟，期间其他命令无法派发。
+    // 整个包进 spawn_blocking；State 不是 'static，闭包里改用 AppHandle 取状态。
+    tauri::async_runtime::spawn_blocking(move || download_online_blocking(app, req))
+        .await
+        .map_err(|e| format!("下载任务异常终止: {e}"))?
+}
+
+fn download_online_blocking(app: AppHandle, req: OnlineSaveReq) -> Result<String, String> {
+    let state = app.state::<AppState>();
     let title = req.title.trim().to_string();
     if title.is_empty() {
         return Err("歌曲标题为空".into());
@@ -1846,7 +2064,7 @@ pub async fn download_online(
         }
         "qq" => {
             let (musicid, musickey) = qq_credential(&state)?;
-            let (u, ext) = crate::qq::song_url(
+            let (u, ext, _kbps) = crate::qq::song_url(
                 &req.id,
                 &req.media_mid,
                 &musicid,
@@ -1860,62 +2078,20 @@ pub async fn download_online(
         _ => return Err("未知音源类型".into()),
     };
 
-    // 2) 下载到保存目录
+    // 2) 下载到保存目录（写 .part → 校验 → 改名，不覆盖已有曲目）
     let dir = save_dir(&state);
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建保存目录失败: {e}"))?;
     let artist = sanitize_filename(&req.artist);
-    let name = format!(
-        "{} - {}.{}",
+    let stem = format!(
+        "{} - {}",
         if artist.is_empty() { "Unknown" } else { &artist },
-        sanitize_filename(&title),
-        ext
+        sanitize_filename(&title)
     );
-    let dest = dir.join(&name);
-    let mut file = std::fs::File::create(&dest).map_err(|e| format!("创建文件失败: {e}"))?;
-    let (total, reader) = http_get_for(&req.kind, &url)?;
-    let mut reader = reader.take(128 * 1024 * 1024);
-    let mut buf = [0u8; 64 * 1024];
-    let mut received: u64 = 0;
-    let mut last_emit = std::time::Instant::now();
-    let mut emitted = false;
-    // 分块读取并回报进度（download://progress 驱动进度条；无 content-length 时 pct 为 0）
-    let dl = (|| -> Result<(), String> {
-        loop {
-            let n = reader.read(&mut buf).map_err(|e| format!("下载失败: {e}"))?;
-            if n == 0 {
-                break;
-            }
-            file.write_all(&buf[..n])
-                .map_err(|e| format!("写入文件失败: {e}"))?;
-            received += n as u64;
-            if last_emit.elapsed() >= std::time::Duration::from_millis(300) {
-                last_emit = std::time::Instant::now();
-                emitted = true;
-                let pct = if total > 0 {
-                    ((received as f64 / total as f64) * 100.0) as u64
-                } else {
-                    0
-                };
-                let _ = app.emit(
-                    "download://progress",
-                    json!({ "url": &title, "received": received, "total": total, "pct": pct.min(99), "done": false }),
-                );
-            }
-        }
-        Ok(())
-    })();
-    drop(file);
-    if let Err(e) = dl {
-        // 已发过进度则先清掉进度条；错误提示由命令返回值统一 toast，避免重复弹窗
-        if emitted {
-            let _ = app.emit("download://progress", json!({ "url": &title, "done": true }));
-        }
-        return Err(e);
-    }
-    let _ = app.emit(
-        "download://progress",
-        json!({ "url": &title, "received": received, "total": if total == 0 { received } else { total }, "pct": 100, "done": true }),
-    );
+    let dest = download_to_dir(&app, &req.kind, &url, &dir, &stem, &ext, &title)?;
+    let name = dest
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
 
     // 3) 取歌词并写标签（失败静默）
     let lyrics = match req.kind.as_str() {
@@ -2224,10 +2400,23 @@ pub async fn netease_user_playlists(
 /// 返回 (本地播放列表 id, 本次实际新增条数)
 #[tauri::command]
 pub async fn netease_import_playlist(
-    state: State<'_, AppState>,
+    app: AppHandle,
     remote_pid: i64, // 网易云歌单 ID
     name: String, // 歌单名（前端传入；新建/同名匹配用）
 ) -> Result<(i64, i64), String> {
+    // 拉歌单是分页 HTTP，导入是"持 db 锁 + N 次 upsert/insert"的长循环。
+    // 整段放 async 命令里会占住运行时线程，并让其它命令长时间等 db 锁。
+    tauri::async_runtime::spawn_blocking(move || netease_import_playlist_blocking(app, remote_pid, name))
+        .await
+        .map_err(|e| format!("导入任务异常终止: {e}"))?
+}
+
+fn netease_import_playlist_blocking(
+    app: AppHandle,
+    remote_pid: i64,
+    name: String,
+) -> Result<(i64, i64), String> {
+    let state = app.state::<AppState>();
     let music_u = {
         let conn = state.db.lock();
         db::get_setting(&conn, "netease_music_u").unwrap_or_default()
@@ -2286,10 +2475,22 @@ pub async fn qq_user_playlists(
 /// 返回 (本地播放列表 id, 本次实际新增条数)
 #[tauri::command]
 pub async fn qq_import_playlist(
-    state: State<'_, AppState>,
+    app: AppHandle,
     remote_pid: i64,
     name: String,
 ) -> Result<(i64, i64), String> {
+    // 同 netease_import_playlist：分页 HTTP + 持锁长循环，整体移出 async 运行时
+    tauri::async_runtime::spawn_blocking(move || qq_import_playlist_blocking(app, remote_pid, name))
+        .await
+        .map_err(|e| format!("导入任务异常终止: {e}"))?
+}
+
+fn qq_import_playlist_blocking(
+    app: AppHandle,
+    remote_pid: i64,
+    name: String,
+) -> Result<(i64, i64), String> {
+    let state = app.state::<AppState>();
     let (musicid, musickey) = qq_credential(&state)?;
     let stored_euin = {
         let conn = state.db.lock();
@@ -2339,7 +2540,10 @@ pub async fn qq_import_playlist(
 
 #[tauri::command]
 pub async fn set_play_quality(state: State<'_, AppState>, quality: String) -> Result<(), String> {
-    if !matches!(quality.as_str(), "standard" | "high" | "lossless") {
+    if !matches!(
+        quality.as_str(),
+        "standard" | "medium" | "higher" | "high" | "lossless"
+    ) {
         return Err("无效的音质选项".into());
     }
     let conn = state.db.lock();
@@ -2399,16 +2603,15 @@ pub async fn seek(state: State<'_, AppState>, ms: u64) -> Result<(), String> {
 #[tauri::command]
 pub async fn set_volume(state: State<'_, AppState>, v: f32) -> Result<(), String> {
     engine_clone(&state).set_volume(v);
-    let conn = state.db.lock();
-    db::set_setting(&conn, "volume", &format!("{}", v));
+    // 立即生效，持久化交给 settings_flusher 合并写入（拖动时不逐次写库）
+    *state.pending_volume.lock() = Some(format!("{v}"));
     Ok(())
 }
 
 #[tauri::command]
 pub async fn set_speed(state: State<'_, AppState>, v: f32) -> Result<(), String> {
     engine_clone(&state).set_speed(v);
-    let conn = state.db.lock();
-    db::set_setting(&conn, "speed", &format!("{}", v));
+    *state.pending_speed.lock() = Some(format!("{v}"));
     Ok(())
 }
 
@@ -2454,6 +2657,9 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<SettingsPayload,
     let auto_update = db::get_setting(&conn, "auto_update")
         .map(|s| s != "false")
         .unwrap_or(true);
+    let exclusive = db::get_setting(&conn, "exclusive")
+        .map(|s| s == "true")
+        .unwrap_or(false);
     Ok(SettingsPayload {
         volume,
         speed,
@@ -2463,6 +2669,7 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<SettingsPayload,
         cache_limit,
         close_action,
         auto_update,
+        exclusive,
     })
 }
 
@@ -2472,6 +2679,46 @@ pub async fn set_auto_update(state: State<'_, AppState>, enabled: bool) -> Resul
     let conn = state.db.lock();
     db::set_setting(&conn, "auto_update", if enabled { "true" } else { "false" });
     Ok(())
+}
+
+// ---------- 独占模式（WASAPI） ----------
+
+/// 开启/关闭独占模式。
+/// 开启后下一首生效；关闭则立刻把设备交还系统、从当前进度切回普通模式。
+/// 返回切换后的实际状态（含回退原因与协商出的设备/采样率）。
+#[tauri::command]
+pub async fn set_exclusive(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    let conn = state.db.lock();
+    db::set_setting(&conn, "exclusive", if enabled { "true" } else { "false" });
+    drop(conn);
+    engine_clone(&state).set_exclusive(enabled)?;
+    Ok(engine_clone(&state).exclusive_info())
+}
+
+/// 独占模式当前状态（界面轮询/切换后刷新用）
+#[tauri::command]
+pub async fn get_exclusive(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    Ok(engine_clone(&state).exclusive_info())
+}
+
+/// 试一下当前设备能不能开独占，不改变用户设置。
+/// 设置页用它提前告诉用户"这台设备支不支持"，免得开了才发现白开。
+#[tauri::command]
+pub async fn probe_exclusive(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let eng = engine_clone(&state);
+    let pref = eng.device_preference();
+    // 用 48k/24bit 试探即可判断设备是否允许独占
+    match crate::exclusive::ExclusiveSink::open(pref.as_deref(), 48000) {
+        Ok(ex) => {
+            let info = (ex.device_name().to_string(), ex.device_rate());
+            drop(ex);
+            Ok(json!({ "supported": true, "device": info.0, "rate": info.1, "reason": null }))
+        }
+        Err(e) => Ok(json!({ "supported": false, "device": null, "rate": null, "reason": e.to_string() })),
+    }
 }
 
 // ---------- 其他 ----------
@@ -2522,6 +2769,14 @@ pub async fn extract_cover_palette(
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Ok(vec![]);
     }
+    // 远程封面下载 + 图片解码都是阻塞 IO（最长 10s 超时），
+    // 切歌时会被高频调用，不能占住 async 运行时的工作线程
+    tauri::async_runtime::spawn_blocking(move || extract_cover_palette_blocking(url))
+        .await
+        .map_err(|e| format!("取色任务异常终止: {e}"))?
+}
+
+fn extract_cover_palette_blocking(url: String) -> Result<Vec<String>, String> {
     let bytes = match ureq::get(&url)
         .set("User-Agent", "Mozilla/5.0")
         .timeout(std::time::Duration::from_secs(10))

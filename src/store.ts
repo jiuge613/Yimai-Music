@@ -38,6 +38,16 @@ import type {
   ViewName,
 } from "./types";
 
+/** 返回栈的一层：视图 + 当时的搜索词 */
+interface NavEntry {
+  view: ViewName;
+  viewParam: number;
+  search: string;
+}
+
+/** 返回栈深度上限，防止长时间使用后无限增长 */
+const MAX_NAV_HISTORY = 50;
+
 interface Store {
   ready: boolean;
   tracks: TrackMeta[];
@@ -55,6 +65,10 @@ interface Store {
   qIndex: number;
   history: number[];
   volume: number;
+  /** 静音开关状态（与 volume=0 分开，取消静音可还原档位） */
+  muted: boolean;
+  /** 静音前的音量档位，0.8 兜底 */
+  volumeMem: number;
   speed: number;
   repeat: RepeatMode;
   shuffle: boolean;
@@ -64,6 +78,12 @@ interface Store {
   view: ViewName;
   viewParam: number;
   search: string;
+  /** 返回栈：每次 setView 压入一层（含当时的搜索词），goBack 逐层弹出 */
+  navHistory: NavEntry[];
+  /** 在线曲库（网易云/QQ/酷狗）各自的搜索词。
+   * 放 store 而非组件本地 state：视图切走会卸载组件，本地 state 会丢，
+   * 返回时搜索词和结果列表就没了。 */
+  onlineKw: Record<"netease" | "qq" | "kugou", string>;
   nowPlayingOpen: boolean;
   /** 播放页无边框全屏（隐藏系统任务栏；播放条隐藏、hover 唤起） */
   fullscreen: boolean;
@@ -74,6 +94,10 @@ interface Store {
   lyrics: LyricsPayload | null;
   lyricsLoading: boolean;
   lyricsFor: string | null;
+  /** GD音乐台歌词兜底开关（默认关闭：对方为 CC BY-NC 条款，需用户自行确认） */
+  gdEnabled: boolean;
+  /** GD音乐台接口地址（可配置，接口迁移时用户自改） */
+  gdBase: string;
 
   // 网易云在线曲库
   neteaseResults: NeteaseTrack[];
@@ -134,7 +158,11 @@ interface Store {
   toast(msg: string, type?: Toast["type"]): number;
   dismissToast(id: number): void;
   setView(v: ViewName, param?: number): void;
+  /** 逐层返回；栈空时返回 false */
+  goBack(): boolean;
   setSearch(s: string): void;
+  /** 在线曲库各平台的搜索词（跨视图保持，返回时可还原） */
+  setOnlineKw(source: "netease" | "qq" | "kugou", kw: string): void;
   setNowPlayingOpen(v: boolean): void;
   /** 切换无边框全屏（退出时同时收起播放页） */
   toggleFullscreen(v?: boolean): void;
@@ -160,6 +188,8 @@ interface Store {
   seek(ms: number): void;
   setScrubbing(v: boolean): void;
   setVolume(v: number): void;
+  /** 静音开关（保留静音前的音量档位） */
+  toggleMute(): void;
   setSpeed(v: number): void;
   setRepeat(m: RepeatMode): void;
   toggleShuffle(): void;
@@ -302,6 +332,9 @@ interface Store {
   reorderPlaylists(ids: number[]): Promise<void>;
 
   loadLyricsByKey(key: string): Promise<void>;
+  /** 读取/设置 GD音乐台歌词兜底源 */
+  refreshGdFallback(): Promise<void>;
+  setGdFallback(enabled: boolean, base?: string): Promise<void>;
   loadLyrics(trackId: number): Promise<void>;
   applyMediaControl(action: string, value?: number): void;
 }
@@ -317,6 +350,19 @@ let initPromise: Promise<void> | null = null;
 /** 逐字节比较（挂起恢复的刷新用）：数据未变化时保持旧引用，避免整页重渲染闪烁 */
 function jsonEq(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** 由曲目信息算出歌词请求 key；无法定位到平台曲目时返回 null。
+ *  开播时加载、设置页改兜底源后重载都走这里，避免两处规则漂移。 */
+function lyricsKeyFor(p: { kind: string; id?: number | null; nid?: number | null; qid?: string | null; kgid?: string | null; lxSourceId?: number | null; lxPlatform?: string | null; lxSongId?: string | null } | null): string | null {
+  if (!p) return null;
+  if (p.kind === "track" && p.id != null) return `track-${p.id}`;
+  if (p.kind === "netease" && p.nid != null) return `net-${p.nid}`;
+  if (p.kind === "qq" && p.qid != null) return `qq-${p.qid}`;
+  if (p.kind === "kugou" && p.kgid != null) return `kug-${p.kgid}`;
+  if (p.kind === "url" && p.lxSourceId != null && p.lxSongId != null)
+    return `lx-${p.lxSourceId}-${p.lxPlatform ?? ""}-${p.lxSongId}`;
+  return null;
 }
 
 /** 应用后端播放状态：player://state 事件与挂起恢复后的主动拉取共用。
@@ -378,20 +424,7 @@ function applyPlayState(p: PlayState, posOverride?: number) {
     pos: posOverride != null ? posOverride : isFreshStart ? 0 : get().pos,
   });
   // 自动加载当前曲目的歌词（播放栏滚动展示用）
-  const key =
-    p.kind === "track" && p.id != null
-      ? `track-${p.id}`
-      : p.kind === "netease" && p.nid != null
-        ? `net-${p.nid}`
-        : p.kind === "qq" && p.qid != null
-          ? `qq-${p.qid}`
-        : p.kind === "kugou" && p.kgid != null
-          ? `kug-${p.kgid}`
-          : p.kind === "url" &&
-              p.lxSourceId != null &&
-              p.lxSongId != null
-            ? `lx-${p.lxSourceId}-${p.lxPlatform ?? ""}-${p.lxSongId}`
-            : null;
+  const key = lyricsKeyFor(p);
   if (key) get().loadLyricsByKey(key);
   // 换曲开播：在线曲目更新“最近播放”；本地曲目只在本地更新单条的
   // lastPlayed/playCount（后端 record_play 已在开播时落库）——
@@ -499,6 +532,8 @@ export const useStore = create<Store>((set, get) => ({
   qIndex: 0,
   history: [],
   volume: 0.8,
+  muted: false,
+  volumeMem: 0.8,
   speed: 1,
   repeat: "off",
   shuffle: false,
@@ -508,6 +543,8 @@ export const useStore = create<Store>((set, get) => ({
   view: "library",
   viewParam: 0,
   search: "",
+  navHistory: [],
+  onlineKw: { netease: "", qq: "", kugou: "" },
   nowPlayingOpen: false,
   fullscreen: false,
   queueOpen: false,
@@ -517,6 +554,8 @@ export const useStore = create<Store>((set, get) => ({
   lyrics: null,
   lyricsLoading: false,
   lyricsFor: null,
+  gdEnabled: false,
+  gdBase: "",
 
   neteaseResults: [],
   neteaseTotal: 0,
@@ -723,6 +762,9 @@ export const useStore = create<Store>((set, get) => ({
         accent: loadAccent(),
         skin: loadSkin(),
         volume: settings.volume,
+        // 启动时把静音/记忆档位也恢复出来，取消静音才有正确的还原目标
+        muted: settings.volume <= 0,
+        volumeMem: settings.volume > 0 ? settings.volume : 0.8,
         speed: settings.speed,
         eqGains: settings.eqGains,
         eqEnabled: settings.eqEnabled,
@@ -746,6 +788,8 @@ export const useStore = create<Store>((set, get) => ({
       get().refreshRecentOnline();
       get().loadManualOrder("library");
       get().loadManualOrder("liked");
+      // 歌词兜底源开关（不阻塞启动，失败保持默认关闭）
+      get().refreshGdFallback();
     } catch (e) {
       set({ ready: true });
       get().toast(`初始化失败：${e}`, "error");
@@ -770,11 +814,43 @@ export const useStore = create<Store>((set, get) => ({
   // ---------- 视图 ----------
 
   setView(v, param = 0) {
-    set({ view: v, viewParam: param, search: "" });
+    const s = get();
+    // 跳到当前所在视图不算一层，避免连点侧边栏把返回栈堆成几十层
+    if (s.view === v && s.viewParam === param) return;
+    // 每一层连同当时的搜索词一起入栈，返回时才能原样还原上一层的浏览状态
+    const entry: NavEntry = {
+      view: s.view,
+      viewParam: s.viewParam,
+      search: s.search,
+    };
+    set({
+      navHistory: [...s.navHistory, entry].slice(-MAX_NAV_HISTORY),
+      view: v,
+      viewParam: param,
+      search: "",
+    });
+  },
+
+  /** 逐层返回上一层；栈空时返回 false（调用方可据此隐藏返回按钮） */
+  goBack() {
+    const { navHistory } = get();
+    if (navHistory.length === 0) return false;
+    const prev = navHistory[navHistory.length - 1];
+    set({
+      navHistory: navHistory.slice(0, -1),
+      view: prev.view,
+      viewParam: prev.viewParam,
+      search: prev.search,
+    });
+    return true;
   },
 
   setSearch(s) {
     set({ search: s });
+  },
+
+  setOnlineKw(source, kw) {
+    set((s) => ({ onlineKw: { ...s.onlineKw, [source]: kw } }));
   },
 
   setNowPlayingOpen(v) {
@@ -1257,11 +1333,32 @@ export const useStore = create<Store>((set, get) => ({
 
   setVolume(v) {
     const vol = Math.max(0, Math.min(1, v));
-    set({ volume: vol });
+    // 拖到 0 不再等同于"静音开关"：音量归零与 muted 是两个状态，
+    // 这样取消静音才能还原到静音前的档位而不是从 0 重新爬
+    if (vol > 0) {
+      set({ volume: vol, muted: false, volumeMem: vol });
+    } else {
+      set({ volume: vol });
+    }
     if (volumeTimer) clearTimeout(volumeTimer);
     volumeTimer = setTimeout(() => {
       api.setVolume(vol).catch(() => {});
     }, 300);
+  },
+
+  /** 静音开关：记住静音前的音量，取消静音时还原 */
+  toggleMute() {
+    const { muted, volume, volumeMem } = get();
+    if (!muted) {
+      // 音量为 0 时先定住当前档位（volumeMem 默认 0.8），否则记的是 0
+      const mem = volume > 0 ? volume : volumeMem || 0.8;
+      set({ muted: true, volume: 0, volumeMem: mem });
+      api.setVolume(0).catch(() => {});
+    } else {
+      const back = volumeMem || 0.8;
+      set({ muted: false, volume: back });
+      api.setVolume(back).catch(() => {});
+    }
   },
 
   setSpeed(v) {
@@ -1730,7 +1827,7 @@ export const useStore = create<Store>((set, get) => ({
         mediaMid: row.mediaMid ?? "",
       });
       await get().refreshTracks();
-      get().toast(`已下载到资料库：${name}`, "success");
+      get().toast(`已下载到本地音乐：${name}`, "success");
     } catch (e) {
       get().toast(String(e), "error");
     }
@@ -1751,7 +1848,7 @@ export const useStore = create<Store>((set, get) => ({
         extra: row.extra,
       });
       await get().refreshTracks();
-      get().toast(`已下载到资料库：${name}`, "success");
+      get().toast(`已下载到本地音乐：${name}`, "success");
     } catch (e) {
       get().toast(String(e), "error");
     }
@@ -2044,16 +2141,23 @@ export const useStore = create<Store>((set, get) => ({
                 : await api.getLyrics(Number(id));
       if (get().lyricsFor === key) {
         const lines = payload?.lines ?? [];
-        // 主源取到歌词：直接用；取不到：走备用歌词源（网易云匹配兜底）
+        // 主源取到歌词：直接用；取不到：逐级兜底（网易云匹配 → GD音乐台）
         if (lines.length > 0) {
           set({ lyrics: payload, lyricsLoading: false });
           pushDesktopLyrics(get());
         } else {
           const cur = get().current;
-          const backup = await api.backupLyric(
-            cur?.title ?? "",
-            cur?.artist ?? ""
-          );
+          const title = cur?.title ?? "";
+          const artist = cur?.artist ?? "";
+          let backup = await api.backupLyric(title, artist);
+          // 网易云也没匹配上，再试 GD音乐台（设置里开启才生效，失败静默）
+          if (backup.lines.length === 0 && get().gdEnabled) {
+            try {
+              backup = await api.gdLyric(title, artist);
+            } catch {
+              /* 兜底源失败不打扰用户 */
+            }
+          }
           if (get().lyricsFor === key) {
             const ok = backup.lines.length > 0;
             set({
@@ -2071,6 +2175,33 @@ export const useStore = create<Store>((set, get) => ({
 
   async loadLyrics(trackId) {
     get().loadLyricsByKey(`track-${trackId}`);
+  },
+
+  /** 读取 GD音乐台兜底源配置（启动与进设置页时调用） */
+  async refreshGdFallback() {
+    try {
+      const s = await api.gdStatus();
+      set({ gdEnabled: s.enabled, gdBase: s.base });
+    } catch {
+      /* 读不到就保持默认关闭 */
+    }
+  },
+
+  async setGdFallback(enabled, base) {
+    const s = await api.setGdFallback(enabled, base);
+    set({ gdEnabled: s.enabled, gdBase: s.base });
+    // 立刻用当前曲目验证一次：开了就重载歌词（会重新走兜底链），免得用户
+    // 以为没生效；关掉则清掉可能来自兜底源的歌词
+    const key = lyricsKeyFor(get().current);
+    if (key) {
+      if (enabled) {
+        // 清掉 lyricsFor 让 loadLyricsByKey 不被"同 key 已加载"短路掉
+        set({ lyricsFor: null });
+        get().loadLyricsByKey(key);
+      } else if (get().lyrics) {
+        set({ lyrics: null, lyricsFor: null });
+      }
+    }
   },
 
   applyMediaControl(action, value) {

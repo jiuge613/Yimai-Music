@@ -18,38 +18,43 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply Yimai rebrand
+      - name: Assert branding is already applied
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # 更新源必须显式指向本仓库，否则通用替换会把它改成 LingyunStudio/Yimai
-          $pairs = @(
-            @('LingyunStudio/RustMusic', 'jiuge613/YimaiMusic'),
-            @('RustMusic', 'Yimai'),
-            @('rustmusic', 'yimai')
+          # 历史上这里有一个「批量把 RustMusic 替换成 Yimai」的步骤。
+          # 仓库本身就是 jiuge613/YimaiMusic，那一步现在只会做两件坏事：
+          #   1) 把上游署名改写成自指（RELEASE_NOTES 正是 Release 正文）
+          #   2) 改写 src-tauri/src/updater.rs 里指向 GITHUB_REPO 的注释
+          # 所以改为「只校验、不改写」：真出现未替换的遗留标识就明确失败。
+          #
+          # 注意只查**功能性标识符**（仓库地址 / 包名 / 可执行文件名），
+          # 不能扫 .md 与注释——RELEASE_NOTES 的上游署名必须原样保留。
+          $functional = @(
+            'src-tauri\Cargo.toml',
+            'src-tauri\tauri.conf.json',
+            'installer\Yimai.iss',
+            'installer\build.ps1',
+            'src-tauri\src\updater.rs'
           )
-          $exts = @('*.rs','*.ts','*.tsx','*.js','*.jsx','*.json','*.toml','*.html','*.css','*.md','*.ps1','*.iss','*.yml')
-          $files = Get-ChildItem -Path . -Recurse -Include $exts -File -ErrorAction SilentlyContinue |
-            Where-Object {
-              $p = $_.FullName
-              $p -notmatch 'node_modules' -and
-              $p -notmatch '\\target\\' -and
-              $p -notmatch '\\icons\\' -and
-              $p -notmatch '\.git\\' -and
-              $_.Name -ne 'LICENSE'
-            }
-          $changed = 0
-          foreach ($f in $files) {
-            $t = Get-Content -LiteralPath $f.FullName -Raw -ErrorAction SilentlyContinue
-            if ($null -eq $t) { continue }
-            $orig = $t
-            foreach ($p in $pairs) { $t = $t.Replace($p[0], $p[1]) }
-            if ($t -ne $orig) {
-              Set-Content -LiteralPath $f.FullName -Value $t -NoNewline -Encoding UTF8
-              $changed++
+          foreach ($f in $functional) {
+            if (-not (Test-Path $f)) { Write-Error "缺少 $f"; exit 1 }
+            $t = Get-Content -LiteralPath $f -Raw
+            # 更新源与包名/可执行文件名里不能残留旧标识
+            if ($f -match 'updater\.rs') {
+              if ($t -notmatch 'jiuge613/YimaiMusic') {
+                Write-Error 'updater.rs 的 GITHUB_REPO 未指向本仓库，自动更新会失效'; exit 1
+              }
+            } elseif ($t -match '(?i)rustmusic') {
+              Write-Error "$f 仍含未替换的旧标识 rustmusic"; exit 1
             }
           }
-          Write-Host "rebranded files: $changed"
+          # 可执行文件名必须统一为 yimai.exe（Inno Setup 与更新脚本都依赖它）
+          $iss = Get-Content installer\Yimai.iss -Raw
+          if ($iss -notmatch 'MyAppExeName\s+"yimai\.exe"') {
+            Write-Error 'installer/Yimai.iss 的 MyAppExeName 必须是 yimai.exe'; exit 1
+          }
+          Write-Host 'branding ok'
 
       - name: Resolve version
         id: ver

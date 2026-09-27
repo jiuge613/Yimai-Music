@@ -68,18 +68,21 @@ function DynamicBackdrop() {
         <>
           {skinImg ? (
             <>
-              {/* 底层：同一张图放大铺满 + 高斯模糊，填补 contain 两侧留白 */}
+              {/* 底层：同一张图放大铺满 + 高斯模糊，填补 contain 两侧留白。
+                  模糊 20px 而非 36px：原来糊成一团色块，壁纸细节全丢，
+                  看着像"背景不明显"；压到 20px 仍能藏住拼接边，但保留纹理。 */}
               <div
                 className="absolute inset-0 transition-all duration-500"
                 style={{
                   backgroundImage: skinUrl,
                   backgroundSize: "cover",
                   backgroundPosition: "center",
-                  filter: "blur(36px)",
-                  transform: "scale(1.15)",
+                  filter: "blur(20px) saturate(1.15)",
+                  transform: "scale(1.12)",
                 }}
               />
-              {/* 前景：backgroundSize: contain，原图完整可见，不裁切不变形 */}
+              {/* 前景：backgroundSize: contain，原图完整可见，不裁切不变形。
+                  轻微提对比+饱和，让壁纸在玻璃面板之间更有存在感。 */}
               <div
                 className="absolute inset-0 transition-all duration-500"
                 style={{
@@ -87,18 +90,20 @@ function DynamicBackdrop() {
                   backgroundSize: "contain",
                   backgroundPosition: "center",
                   backgroundRepeat: "no-repeat",
+                  filter: "saturate(1.08) contrast(1.04)",
                 }}
               />
             </>
           ) : (
-            <div
-              className="absolute inset-0 transition-all duration-500"
-              style={{
-                backgroundImage: skinUrl,
-                backgroundSize: "cover",
-                backgroundPosition: "center",
-              }}
-            />
+          <div
+            className="absolute inset-0 transition-all duration-500"
+            style={{
+              backgroundImage: skinUrl,
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+              filter: "saturate(1.08) contrast(1.04)",
+            }}
+          />
           )}
           {/* 主题纱：暗色压暗 / 浅色洗成粉彩，保证前景文字可读 */}
           <div className="absolute inset-0" style={{ background: "var(--skin-scrim)" }} />
@@ -182,6 +187,11 @@ export default function App() {
       if (e.key === "Escape" && useStore.getState().fullscreen) {
         useStore.getState().toggleFullscreen(false);
       }
+      // Alt + ←：逐层返回上一页（与标题栏返回按钮同一条路径）
+      if (e.altKey && e.key === "ArrowLeft") {
+        e.preventDefault();
+        useStore.getState().goBack();
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -227,7 +237,7 @@ export default function App() {
         <div className="animate-pulse">
           <Logo size={64} />
         </div>
-        <div className="text-[13px] text-[var(--ink-2)]">Yimai 正在启动…</div>
+        <div className="text-[13px] text-[var(--ink-2)]">Yimai Music 正在启动…</div>
       </div>
     );
   }

@@ -407,17 +407,20 @@ pub fn song_url(
     musickey: &str,
     quality: &str,
     vip: bool,
-) -> Result<(String, String), String> {
-    // 前缀：M500=128k M800=320k F000=flac；无 media_mid 时按官方规则用 songmid 拼接
-    let ladder: Vec<(&str, &str)> = match quality {
-        "lossless" => vec![("F000", "flac"), ("M800", "mp3"), ("M500", "mp3")],
-        "standard" => vec![("M500", "mp3")],
-        _ => vec![("M800", "mp3"), ("M500", "mp3")],
+) -> Result<(String, String, i64), String> {
+    // vkey 前缀只有三档：M500=128k、M800=320k、F000=flac。
+    // QQ 没有 192/256k 档位，请求这两档时向上取 M800（宁高不低），
+    // 因此必须把实际命中的档位回传给调用方，播放条上的音质标签
+    // 要显示真实码率而不是用户请求的码率。
+    let ladder: Vec<(&str, &str, i64)> = match quality {
+        "lossless" => vec![("F000", "flac", 1411), ("M800", "mp3", 320), ("M500", "mp3", 128)],
+        "standard" => vec![("M500", "mp3", 128)],
+        _ => vec![("M800", "mp3", 320), ("M500", "mp3", 128)],
     };
     let mut last_resp = String::new();
     // 所有尝试都返回 code==0（会话有效、接口无异常）但始终没有链接
     let mut all_ok_but_no_url = true;
-    for (prefix, ext) in ladder {
+    for (prefix, ext, kbps) in ladder {
         let file_base = if media_mid.is_empty() {
             format!("{songmid}{songmid}")
         } else {
@@ -470,7 +473,7 @@ pub fn song_url(
                     .to_string();
                 format!("{}{}", sip, purl)
             };
-            return Ok((url, ext.to_string()));
+            return Ok((url, ext.to_string(), kbps));
         }
         last_resp = serde_json::to_string(&resp).unwrap_or_default();
     }

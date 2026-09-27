@@ -8,7 +8,7 @@ export default function Logo({ size = 44 }: { size?: number }) {
   return (
     <img
       src="/app-icon.png"
-      alt="Yimai"
+      alt="Yimai Music"
       width={size}
       height={size}
       draggable={false}

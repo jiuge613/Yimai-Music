@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  AudioLines,
   FileUp,
   FlaskConical,
   Folder,
@@ -8,6 +9,7 @@ import {
   Headphones,
   Link2,
   Loader2,
+  MicVocal,
   RefreshCw,
   RotateCcw,
   Settings as SettingsIcon,
@@ -17,7 +19,7 @@ import {
 import { useStore } from "../store";
 import { api } from "../api";
 import { extractLxRuntimeBase } from "../lxRuntime";
-import type { LxSourceItem } from "../types";
+import type { ExclusiveInfo, ExclusiveProbe, LxSourceItem } from "../types";
 import {
   ACCENTS,
   loadCustomAccentHex,
@@ -29,10 +31,14 @@ import { showUpdateDialog } from "../components/UpdateDialog";
 
 const EQ_FREQS = ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
 
+// 音质档位。key 是后端 setting 的取值，必须与 commands::set_play_quality 的白名单一致。
+// 命名按码率递增：中档/较高之后原 320k 顺延为「高音质」，避免两个「较高」重名。
 const QUALITIES: { key: string; label: string; desc: string }[] = [
-  { key: "standard", label: "标准", desc: "128k" },
-  { key: "high", label: "较高", desc: "320k" },
-  { key: "lossless", label: "无损", desc: "FLAC" },
+  { key: "standard", label: "标准", desc: "128K" },
+  { key: "medium", label: "中档", desc: "192K" },
+  { key: "higher", label: "较高", desc: "256K" },
+  { key: "high", label: "高音质", desc: "320K" },
+  { key: "lossless", label: "无损", desc: "FLAC/WAV" },
 ];
 
 const PRESETS: Record<string, number[]> = {
@@ -112,6 +118,88 @@ export default function SettingsView() {
   // 关于与更新
   const [appVersion, setAppVersion] = useState("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  // 独占模式（WASAPI）
+  const [excl, setExcl] = useState<ExclusiveInfo | null>(null);
+  const [exclBusy, setExclBusy] = useState(false);
+  const [exclProbe, setExclProbe] = useState<ExclusiveProbe | null>(null);
+  const [exclProbing, setExclProbing] = useState(false);
+  // GD音乐台歌词兜底
+  const gdEnabled = useStore((s) => s.gdEnabled);
+  const gdBase = useStore((s) => s.gdBase);
+  const setGdFallback = useStore((s) => s.setGdFallback);
+  const [gdAttr, setGdAttr] = useState("GD音乐台 (music.gdstudio.xyz)");
+  const [gdDraftBase, setGdDraftBase] = useState("");
+  const [gdBusy, setGdBusy] = useState(false);
+
+  const toggleGd = async (on: boolean) => {
+    setGdBusy(true);
+    try {
+      await setGdFallback(on, on && gdDraftBase.trim() ? gdDraftBase.trim() : undefined);
+      setGdDraftBase("");
+      useStore
+        .getState()
+        .toast(
+          on ? "已开启歌词兜底源，本曲已重新匹配歌词" : "已关闭歌词兜底源",
+          "success"
+        );
+    } catch (e) {
+      useStore.getState().toast(String(e), "error");
+    } finally {
+      setGdBusy(false);
+    }
+  };
+
+  const saveGdBase = async () => {
+    setGdBusy(true);
+    try {
+      await setGdFallback(gdEnabled, gdDraftBase.trim());
+      setGdDraftBase("");
+      useStore.getState().toast("接口地址已保存", "success");
+    } catch (e) {
+      useStore.getState().toast(String(e), "error");
+    } finally {
+      setGdBusy(false);
+    }
+  };
+
+  const refreshExclusive = useCallback(async () => {
+    try {
+      setExcl(await api.getExclusive());
+    } catch {
+      /* 状态刷新失败不打扰用户 */
+    }
+  }, []);
+
+  const toggleExclusive = async (on: boolean) => {
+    setExclBusy(true);
+    try {
+      const info = await api.setExclusive(on);
+      setExcl(info);
+      if (on && !info.active) {
+        // 开关打开了但实际没生效：把回退原因讲清楚
+        useStore
+          .getState()
+          .toast(`独占模式未生效：${info.reason ?? "当前设备不支持"}`, "error");
+      } else if (!on) {
+        useStore.getState().toast("已切回普通模式，设备已交还系统", "success");
+      }
+    } catch (e) {
+      useStore.getState().toast(String(e), "error");
+    } finally {
+      setExclBusy(false);
+    }
+  };
+
+  const runProbe = async () => {
+    setExclProbing(true);
+    try {
+      setExclProbe(await api.probeExclusive());
+    } catch (e) {
+      useStore.getState().toast(String(e), "error");
+    } finally {
+      setExclProbing(false);
+    }
+  };
 
   const refreshDevices = async () => {
     try {
@@ -147,6 +235,7 @@ export default function SettingsView() {
       setSaveDirDefault(d.default);
     });
     refreshDevices();
+    refreshExclusive();
     api.getAppInfo().then((i) => setAppVersion(i.version)).catch(() => {});
     useStore.getState().refreshCacheBytes();
     // 设备热插拔（插入耳机等）后端自动切换时同步 UI
@@ -582,8 +671,70 @@ export default function SettingsView() {
           </p>
         </section>
 
-        {/* 下载目录 */}
+        {/* 独占模式（WASAPI 直连声卡） */}
         <section style={{ ["--row-idx" as string]: 6 }} className="anim-row glass rounded-2xl p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-[14.5px] font-semibold">独占模式</h2>
+            <button
+              className="btn-ghost w-7 h-7"
+              onClick={runProbe}
+              disabled={exclProbing}
+              title="检测当前设备是否支持独占"
+            >
+              {exclProbing ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <FlaskConical size={13} />
+              )}
+            </button>
+          </div>
+          <div className="flex items-center gap-4">
+            <AudioLines size={14} className="text-[var(--ink-2)] shrink-0" />
+            <button
+              className={`relative w-10 h-[22px] rounded-full transition-colors shrink-0 ${
+                excl?.enabled ? "bg-[var(--accent)]" : "bg-[var(--shade-strong)]"
+              } ${exclBusy ? "opacity-60" : ""}`}
+              onClick={() => toggleExclusive(!excl?.enabled)}
+              disabled={exclBusy}
+              title={excl?.enabled ? "关闭独占模式" : "开启独占模式"}
+            >
+              <span
+                className={`absolute top-[3px] w-4 h-4 rounded-full bg-white shadow transition-all ${
+                  excl?.enabled ? "left-[21px]" : "left-[3px]"
+                }`}
+              />
+            </button>
+            <span className="text-[11.5px] text-[var(--ink-3)] leading-relaxed">
+              {excl?.active
+                ? `已生效 · 设备 ${excl.device} · ${excl.rate} Hz 直通`
+                : excl?.enabled
+                  ? "已开启，将在下一首生效"
+                  : "绕过系统混音器直连声卡，采样率按源文件直通，不经系统重采样与音效处理"}
+            </span>
+          </div>
+          {/* 回退原因：开关开了但设备不支持时，必须说清为什么 */}
+          {excl?.enabled && !excl.active && excl.reason && (
+            <p className="text-[11.5px] text-[var(--ink-3)] mt-2 leading-relaxed">
+              已自动回退普通模式：{excl.reason}。换用有线耳机、USB DAC 或主板/显卡音频输出即可生效。
+            </p>
+          )}
+          {exclProbe && !exclProbe.supported && (
+            <p className="text-[11.5px] text-[var(--ink-3)] mt-2 leading-relaxed">
+              检测结果：当前设备不支持独占（{exclProbe.reason}）。蓝牙耳机、网络音箱等驱动普遍不支持。
+            </p>
+          )}
+          {exclProbe?.supported && (
+            <p className="text-[11.5px] text-[var(--ink-3)] mt-2 leading-relaxed">
+              检测结果：{exclProbe.device} 支持独占（{exclProbe.rate} Hz）。
+            </p>
+          )}
+          <p className="text-[11.5px] text-[var(--ink-3)] mt-2 leading-relaxed">
+            独占期间本机其它应用的音频会被静音，这是独占本身的特性；关闭开关会立即把设备交还系统并从当前进度切回普通模式。均衡器、音量、倍速与拖动定位在独占下均可用。
+          </p>
+        </section>
+
+        {/* 下载目录 */}
+        <section style={{ ["--row-idx" as string]: 7 }} className="anim-row glass rounded-2xl p-5">
           <h2 className="text-[14.5px] font-semibold mb-3">下载保存目录</h2>
           <div className="flex items-center gap-3">
             <Folder size={14} className="text-[var(--ink-2)] shrink-0" />
@@ -595,12 +746,12 @@ export default function SettingsView() {
             </button>
           </div>
           <p className="text-[11.5px] text-[var(--ink-3)] mt-2">
-            在线歌曲“下载到本地”将保存到此目录，并自动加入资料库（含标签与歌词）。
+            在线歌曲“下载到本地”将保存到此目录，并自动加入本地音乐（含标签与歌词）。
           </p>
         </section>
 
         {/* 缓存 */}
-        <section style={{ ["--row-idx" as string]: 7 }} className="anim-row glass rounded-2xl p-5">
+        <section style={{ ["--row-idx" as string]: 8 }} className="anim-row glass rounded-2xl p-5">
           <h2 className="text-[14.5px] font-semibold mb-2">缓存</h2>
           <div className="flex items-center gap-4 mb-3">
             <span className="text-[12.5px] text-[var(--ink-2)] w-[80px]">当前占用</span>
@@ -643,8 +794,62 @@ export default function SettingsView() {
           </p>
         </section>
 
+        {/* 歌词兜底源（GD音乐台） */}
+        <section style={{ ["--row-idx" as string]: 9 }} className="anim-row glass rounded-2xl p-5">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-[14.5px] font-semibold">歌词兜底源</h2>
+            <span className="text-[10.5px] text-[var(--ink-3)]">出处：{gdAttr}</span>
+          </div>
+          <div className="flex items-center gap-4">
+            <MicVocal size={14} className="text-[var(--ink-2)] shrink-0" />
+            <button
+              className={`relative w-10 h-[22px] rounded-full transition-colors shrink-0 ${
+                gdEnabled ? "bg-[var(--accent)]" : "bg-[var(--shade-strong)]"
+              } ${gdBusy ? "opacity-60" : ""}`}
+              onClick={() => toggleGd(!gdEnabled)}
+              disabled={gdBusy}
+              title={gdEnabled ? "关闭歌词兜底源" : "开启歌词兜底源"}
+            >
+              <span
+                className={`absolute top-[3px] w-4 h-4 rounded-full bg-white shadow transition-all ${
+                  gdEnabled ? "left-[21px]" : "left-[3px]"
+                }`}
+              />
+            </button>
+            <span className="text-[11.5px] text-[var(--ink-3)] leading-relaxed">
+              {gdEnabled
+                ? "已开启 · 仅在本地标签、平台接口、网易云都取不到歌词时才会调用"
+                : "默认关闭。本地标签与各平台都没歌词时，用歌名+歌手到 GD音乐台 检索一次"}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-3 mt-3">
+            <span className="text-[12.5px] text-[var(--ink-2)] w-[80px] shrink-0">接口地址</span>
+            <input
+              type="text"
+              value={gdDraftBase || gdBase}
+              onChange={(e) => setGdDraftBase(e.target.value)}
+              placeholder={gdBase}
+              className="flex-1 h-9 rounded-lg bg-[var(--shade)] border border-[var(--line)] px-2.5 text-[12px] text-[var(--ink)] outline-none focus:border-[rgba(240,162,74,0.45)]"
+            />
+            <button
+              className="btn-secondary !py-1.5 !px-3 shrink-0"
+              onClick={saveGdBase}
+              disabled={gdBusy || !gdDraftBase.trim()}
+            >
+              保存
+            </button>
+          </div>
+
+          <p className="text-[11.5px] text-[var(--ink-3)] mt-2 leading-relaxed">
+            对方声明为 <b>CC BY-NC 4.0</b>，仅供学习参考、禁止商用与传播，并要求注明出处。
+            开启即表示你自行确认自己的使用符合其条款；地址可改为自建镜像（禁止内网/环回地址）。
+            官方限流 5 分钟 50 次，本功能仅作最后兜底、失败静默不打扰。
+          </p>
+        </section>
+
         {/* 关于与更新 */}
-        <section style={{ ["--row-idx" as string]: 8 }} className="anim-row glass rounded-2xl p-5">
+        <section style={{ ["--row-idx" as string]: 10 }} className="anim-row glass rounded-2xl p-5">
           <h2 className="text-[14.5px] font-semibold mb-3">关于与更新</h2>
           <div className="flex items-center gap-4">
             <span className="text-[12.5px] text-[var(--ink-2)] w-[80px]">当前版本</span>
@@ -689,7 +894,7 @@ export default function SettingsView() {
         </section>
 
         <div className="text-[11.5px] text-[var(--ink-3)] px-1 pb-2">
-          Yimai {appVersion ? `v${appVersion}` : ""} · Rust + Tauri 2 + React ·
+          Yimai Music {appVersion ? `v${appVersion}` : ""} · Rust + Tauri 2 + React ·
           引擎 rodio / symphonia · 界面仅支持 Windows（架构上保留跨平台能力）
         </div>
       </div>

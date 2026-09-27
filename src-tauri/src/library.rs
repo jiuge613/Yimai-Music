@@ -30,9 +30,36 @@ pub fn norm_path(p: &Path) -> String {
     s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
 }
 
+/// 发起一次扫描。同一个时刻只允许一个扫描线程跑：并发扫描会各自算
+/// delete_missing 的 seen 集合，互相把对方刚扫到的文件判成"已丢失"，
+/// 表现为歌曲反复在资料库里消失/重现。
+/// 扫描期间的新请求（加文件夹、删文件夹、重扫）合并成一个"待补跑"标记，
+/// 由当前扫描收尾时再跑一轮，而不是排成 N 个线程。
 pub fn spawn_scan(app: &AppHandle) {
+    let st = app.state::<AppState>();
+    if st.scan_active.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        st.scan_pending.store(true, std::sync::atomic::Ordering::SeqCst);
+        return;
+    }
     let a = app.clone();
-    std::thread::spawn(move || run_scan(a));
+    std::thread::spawn(move || run_scan_loop(a));
+}
+
+fn run_scan_loop(app: AppHandle) {
+    loop {
+        run_scan(app.clone());
+        let st = app.state::<AppState>();
+        // 先释放占用标志再取待办：这样"恰好在扫描结束时到达"的请求能自己
+        // 占到位置开跑，不会看到 active=true 就只记标记然后被漏掉。
+        st.scan_active.store(false, std::sync::atomic::Ordering::SeqCst);
+        if !st.scan_pending.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            break;
+        }
+        // 待办存在但已有人接手（对方在我们 swap 之后抢先占了位），交给他跑
+        if st.scan_active.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            break;
+        }
+    }
 }
 
 pub fn run_scan(app: AppHandle) {
