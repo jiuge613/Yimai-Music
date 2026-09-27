@@ -18,7 +18,7 @@ export interface Skin {
   desc: string;
   /** 完整 SVG 源码（单引号属性，无文字，纯矢量场景） */
   svg?: string;
-  /** 位图背景（相对 public 的路径，如 /skins/xiaomei.jpg）；与 svg 二选一，image 优先 */
+  /** 位图背景（相对 public 的路径，如 /skins/xiaomei.png）；与 svg 二选一，image 优先 */
   image?: string;
   /** 深色主题的纱：压暗背景保证浅色文字可读（按场景明暗单独调） */
   scrimDark: string;
@@ -812,7 +812,7 @@ export function skinUri(key: string): string | null {
   return uri;
 }
 
-/** 位图皮肤的原图资源路径（如 "/skins/xiaomei.jpg"）；非位图皮肤返回 null。
+/** 位图皮肤的原图资源路径（如 "/skins/xiaomei.png"）；非位图皮肤返回 null。
  *  调用方据此切换适配策略：位图用「模糊铺满 + contain 完整显示」双层渲染，
  *  避免 cover 在宽窗口下把方图/竖图裁掉大半。 */
 export function skinImage(key: string): string | null {
