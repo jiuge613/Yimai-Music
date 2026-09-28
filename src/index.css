@@ -12,18 +12,18 @@
 
 :root {
   --bg: #0f0c09;
-  --ink: #f6f1e8;
+  /* 暗色主题文字整体提亮一档：原 #f6f1e8 米白偏暖，在深底上不够"跳"，
+     纯白对比最大；ink-2/ink-3 同步提亮保证次级文字过 WCAG AA */
+  --ink: #ffffff;
   /* ink-2/ink-3 是次级与弱化文字，用在标题下的副信息、计数、空态说明上。
      原值（#b3a897 / #7d7365）在壁纸亮部上对比度不足，这里整体提亮一档，
      保证"无论背后是什么图"都能读清。 */
-  --ink-2: #c6bcaa;
-  /* ink-3 取 #aea695 是实测出来的：按「壁纸亮部 + 皮肤纱 + 玻璃底」合成后
-     最差背景约 0.037 相对亮度，此值对比度 5.0:1，过 WCAG AA 正文线（4.5:1）；
-     更暗的 #9a9280 只有 3.9:1，在亮壁纸上会读不清。 */
-  --ink-3: #aea695;
+  --ink-2: #d6cec0;
+  /* ink-3 提亮：原 #aea695 在壁纸亮部上接近临界，提亮后全场景可读 */
+  --ink-3: #bfb7a7;
   --line: rgba(243, 233, 216, 0.09);
-  --glass-bg: rgba(255, 244, 228, 0.045);
-  --glass-bg-strong: rgba(26, 21, 16, 0.72);
+  --glass-bg: rgba(255, 244, 228, 0.075);
+  --glass-bg-strong: rgba(26, 21, 16, 0.78);
   --glass-line: rgba(243, 233, 216, 0.1);
   --shade: rgba(243, 233, 216, 0.05);
   --shade-strong: rgba(243, 233, 216, 0.09);
@@ -68,12 +68,13 @@ html[data-theme="light"] {
   /* 主文字用纯黑：原 #1e2735 是带蓝调的哑光黑，在浅色玻璃面板上偏灰、
      显脏。纯黑与其后的 --ink-2/--ink-3 次级灰拉开层次，正文更利落。 */
   --ink: #000000;
-  --ink-2: #4d5a6d;
-  /* 同理实测：最亮壁纸合成后背景约 0.92 亮度，此值对比度 5.1:1 */
-  --ink-3: #5d6a7d;
+  --ink-2: #39445a;
+  /* 同理实测：最亮壁纸合成后背景约 0.92 亮度，此值对比度 5.1:1。
+     用户反馈整体偏淡：ink-3 加深到 6.5:1 一档 */
+  --ink-3: #4a5870;
   --line: rgba(43, 53, 70, 0.1);
-  --glass-bg: rgba(255, 255, 255, 0.42);
-  --glass-bg-strong: rgba(250, 252, 255, 0.88);
+  --glass-bg: rgba(255, 255, 255, 0.52);
+  --glass-bg-strong: rgba(250, 252, 255, 0.9);
   --glass-line: rgba(255, 255, 255, 0.75);
   --shade: rgba(43, 53, 70, 0.055);
   --shade-strong: rgba(43, 53, 70, 0.1);
@@ -589,8 +590,10 @@ html[data-theme="light"][data-skin="on"] .glass {
     font-weight 0.5s ease,
     opacity 0.5s ease,
     transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
-  color: var(--ink-3);
-  font-size: 20px;
+  color: var(--ink-2);
+  /* 未唱行 20px→22px：rAF 会把当前行直接写成 25px，原 20px 与已唱差 5px，
+     未唱行在播放页里显得过小；22px 保住层级差（25/22）又足够醒目 */
+  font-size: 22px;
   font-weight: 600;
 }
 .lyric-line.active {

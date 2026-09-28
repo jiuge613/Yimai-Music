@@ -851,15 +851,20 @@ export const useStore = create<Store>((set, get) => ({
     void get().refreshDownloads();
 
     try {
-      const [settings, tracks, folders, playlists, sources, neteaseStatus, qqStatus] = await Promise.all([
-        api.getSettings(),
-        api.listTracks(),
-        api.listFolders(),
-        api.listPlaylists(),
-        api.listSources(),
-        api.neteaseStatus(),
-        api.qqStatus(),
-      ]);
+      const [settings, tracks, folders, playlists, sources, neteaseStatus, qqStatus, gdStatus] =
+        await Promise.all([
+          api.getSettings(),
+          api.listTracks(),
+          api.listFolders(),
+          api.listPlaylists(),
+          api.listSources(),
+          api.neteaseStatus(),
+          api.qqStatus(),
+          // GD 兜底开关也要在启动时恢复：gd_status 读的是 DB 落库值。
+          // 不拉的话重启后 store 永远是初始 false，即使设置里开着、
+          // 歌词兜底判断 get().gdEnabled 也永远不触发（用户感知"没生效"）。
+          api.gdStatus(),
+        ]);
       set({
         theme: loadTheme(),
         accent: loadAccent(),
@@ -875,6 +880,11 @@ export const useStore = create<Store>((set, get) => ({
         folders,
         playlists,
         sources,
+        // GD 兜底开关也要在启动时恢复：gdStatus 读的是 DB 落库值。
+        // 不拉的话重启后 store 永远是 false，即使设置里开着、
+        // 歌词兜底判断 get().gdEnabled 也永远不触发（用户感知"没生效"）。
+        gdEnabled: gdStatus.enabled,
+        gdBase: gdStatus.base,
         neteaseLoggedIn: neteaseStatus.loggedIn,
         neteaseNickname: neteaseStatus.nickname,
         qqLoggedIn: qqStatus.loggedIn,

@@ -507,17 +507,25 @@ impl Engine {
                 // path 一律是本地路径（本地曲目或已缓存的在线音源文件）
                 if !info.path.is_empty() {
                     match File::open(&info.path) {
-                        Ok(file) => {
-                            let src = Decoder::new(buffered_reader(file))
-                                .map_err(|e| format!("无法解码该音频文件: {e}"))?
-                                .convert_samples::<f32>()
-                                .skip_duration(Duration::from_millis(pos));
-                            let wrapped = EqSource::with_base(
-                                src,
-                                self.eq.clone(),
-                                self.pos_ms.clone(),
-                                pos as f64,
-                            );
+                    Ok(file) => {
+                        let mut src = Decoder::new(buffered_reader(file))
+                            .map_err(|e| format!("无法解码该音频文件: {e}"))?
+                            .convert_samples::<f32>();
+                        // 不能用 skip_duration：它是"逐样本解码后丢弃"，定位到
+                        // 中途要把已播部分整个解一遍（FLAC 长歌可阻塞数十秒，
+                        // 表现为切设备后续播长时间无响应）。rodio 0.20 的
+                        // symphonia 后端 try_seek 按帧真跳转，瞬时完成。
+                        if pos > 0 {
+                            if let Err(e) = src.try_seek(Duration::from_millis(pos)) {
+                                crate::elog!("[engine] 切设备续播定位到 {pos}ms 失败，从头播: {e}");
+                            }
+                        }
+                        let wrapped = EqSource::with_base(
+                            src,
+                            self.eq.clone(),
+                            self.pos_ms.clone(),
+                            pos as f64,
+                        );
                             let mut out = self.output.write();
                             out.clear();
                             out.append(BoxedSrc(Box::new(wrapped)))?;
@@ -595,14 +603,18 @@ impl Engine {
         type AnySrc = EqSource<BoxedSrc>;
         let build = || -> Result<AnySrc, String> {
             let file = File::open(&path).map_err(|e| format!("打开文件失败: {e}"))?;
-            let dec = Decoder::new(buffered_reader(file))
+            let mut dec = Decoder::new(buffered_reader(file))
                 .map_err(|e| format!("无法解码该音频文件: {e}"))?
                 .convert_samples::<f32>();
-            let inner: BoxedSrc = if skip_ms > 0 {
-                BoxedSrc(Box::new(dec.skip_duration(Duration::from_millis(skip_ms))))
-            } else {
-                BoxedSrc(Box::new(dec))
-            };
+            // skip_ms>0 时不能用 skip_duration：它是"逐样本解码后丢弃"，
+            // FLAC/长歌要先把已跳过部分整个解一遍（切歌/seek 重建可卡数秒）。
+            // rodio 0.20 的 symphonia 后端 try_seek 按帧真跳转，瞬时完成。
+            if skip_ms > 0 {
+                if let Err(e) = dec.try_seek(Duration::from_millis(skip_ms)) {
+                    crate::elog!("[engine] 开播定位到 {skip_ms}ms 失败，从头播: {e}");
+                }
+            }
+            let inner: BoxedSrc = BoxedSrc(Box::new(dec));
             Ok(EqSource::new(inner, self.eq.clone(), self.pos_ms.clone()))
         };
         let wrapped = match build() {
@@ -897,7 +909,16 @@ impl Engine {
             return Ok(());
         }
         // 关闭：立即重建为共享后端（会把设备交还系统，其它应用音频恢复）
-        let r = self.switch_output_device(self.device_pref.read().as_deref());
+        //
+        // ⚠️ 不能写成 `self.switch_output_device(self.device_pref.read().as_deref())`：
+        // 临时读锁守卫会活到整个调用结束（Rust 临时值生命周期规则），
+        // 而 switch_output_device 内部的 set_device_preference 要拿同一把锁的
+        // 写锁 —— 同线程读锁未放再取写锁，parking_lot 直接死锁。
+        // 这就是 v1.1.5 上"关独占必卡死"的真因：卡点正好在日志
+        // "新输出流已建立"之后（set_device_preference 是下一步），
+        // 且不占 output 锁（期间其它播放命令照常工作）。
+        let pref = self.device_pref.read().clone();
+        let r = self.switch_output_device(pref.as_deref());
         crate::elog!("[engine] set_exclusive(false) 结果: {r:?}");
         r
     }
