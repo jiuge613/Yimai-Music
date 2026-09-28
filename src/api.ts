@@ -120,7 +120,9 @@ export const api = {
   /** LX 音源歌词：凭播放时携带的音源身份回查 lyric.php */
   lxLyric: (sourceId: number, platform: string, songId: string) =>
     invoke<LyricsPayload>("lx_lyric", { sourceId, platform, songId }),
-  /** 下载 LX 音源曲目（凭播放时携带的音源身份取链后下载到本地资料库） */
+  /** 下载 LX 音源曲目（凭播放时携带的音源身份取链后下载到本地资料库）。
+   *  quality 为本次下载指定的音质档（standard/medium/higher/high/lossless），
+   *  缺省时后端回落到设置里的默认音质 */
   lxDownload: (req: {
     sourceId: number;
     platform: string;
@@ -131,6 +133,7 @@ export const api = {
     cover: string;
     durationMs: number;
     extra?: string;
+    quality?: string;
   }) => invoke<string>("lx_download", { req }),
   neteaseSearch: (keyword: string, offset: number) =>
     invoke<{ total: number; songs: NeteaseTrack[] }>("netease_search", {

@@ -1274,9 +1274,16 @@ fn lx_download_blocking(app: AppHandle, req: LxDownloadReq) -> Result<String, St
         };
         resolve_platform(&src_item, &req.platform)
     };
-    let setting = {
-        let conn = state.db.lock();
-        db::get_setting(&conn, "quality").unwrap_or_else(|| "high".to_string())
+    // 音质：优先本次下载弹层里选定的档位；未选（或非法值）用设置里的默认档。
+    // 档位白名单与 set_play_quality 一致，防止透传任意字符串进取链接口。
+    let setting = match req.quality.as_deref().map(str::trim) {
+        Some(q) if matches!(q, "standard" | "medium" | "higher" | "high" | "lossless") => {
+            q.to_string()
+        }
+        _ => {
+            let conn = state.db.lock();
+            db::get_setting(&conn, "quality").unwrap_or_else(|| "high".to_string())
+        }
     };
     let by_setting = lx_quality(&setting);
     let quality = {
@@ -1935,6 +1942,10 @@ pub struct LxDownloadReq {
     pub duration_ms: u64,
     #[serde(default)]
     pub extra: Option<String>,
+    /// 本次下载指定的音质档（standard/medium/higher/high/lossless）；
+    /// 缺省或非法值回落到设置里的默认音质
+    #[serde(default)]
+    pub quality: Option<String>,
 }
 
 fn save_dir(state: &AppState) -> std::path::PathBuf {

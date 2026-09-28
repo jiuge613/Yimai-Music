@@ -28,18 +28,9 @@ import {
   themeLyricsDefaults,
 } from "../theme";
 import { showUpdateDialog } from "../components/UpdateDialog";
+import { QUALITIES } from "../utils";
 
 const EQ_FREQS = ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
-
-// 音质档位。key 是后端 setting 的取值，必须与 commands::set_play_quality 的白名单一致。
-// 命名按码率递增：中档/较高之后原 320k 顺延为「高音质」，避免两个「较高」重名。
-const QUALITIES: { key: string; label: string; desc: string }[] = [
-  { key: "standard", label: "标准", desc: "128K" },
-  { key: "medium", label: "中档", desc: "192K" },
-  { key: "higher", label: "较高", desc: "256K" },
-  { key: "high", label: "高音质", desc: "320K" },
-  { key: "lossless", label: "无损", desc: "FLAC/WAV" },
-];
 
 const PRESETS: Record<string, number[]> = {
   平直: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],

@@ -41,6 +41,17 @@ export function fmtDate(secs: number): string {
     .padStart(2, "0")}`;
 }
 
+/** 音质档位。key 是后端 setting 的取值，必须与 commands::set_play_quality
+ *  的白名单一致。命名按码率递增：中档/较高之后原 320k 顺延为「高音质」，
+ *  避免两个「较高」重名。设置页与播放条下载音质弹层共用。 */
+export const QUALITIES: { key: string; label: string; desc: string }[] = [
+  { key: "standard", label: "标准", desc: "128K" },
+  { key: "medium", label: "中档", desc: "192K" },
+  { key: "higher", label: "较高", desc: "256K" },
+  { key: "high", label: "高音质", desc: "320K" },
+  { key: "lossless", label: "无损", desc: "FLAC/WAV" },
+];
+
 /**
  * 右键菜单/弹出层的视口夹取：保证菜单完整出现在窗口内。
  * x/y 为期望位置（光标或锚点右下角），menuW/menuH 为菜单尺寸，

@@ -17,6 +17,7 @@ import {
   type LyricPageColors,
 } from "./theme";
 import { applySkin, loadSkin, saveSkin } from "./skins";
+import { QUALITIES } from "./utils";
 import type {
   CurrentTrack,
   PlaylistEntryMeta,
@@ -348,6 +349,8 @@ interface Store {
     cover: string;
     durationMs: number;
     extra?: string;
+    /** 本次下载指定的音质档；缺省用设置里的默认音质 */
+    quality?: string;
   }): Promise<void>;
   refreshLikedOnline(): Promise<void>;
   refreshRecentOnline(): Promise<void>;
@@ -2070,7 +2073,8 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   async downloadLx(row) {
-    get().toast("开始下载…", "info");
+    const qLabel = QUALITIES.find((q) => q.key === row.quality)?.label;
+    get().toast(qLabel ? `开始下载（${qLabel}）…` : "开始下载…", "info");
     try {
       const name = await api.lxDownload({
         sourceId: row.sourceId,
@@ -2082,6 +2086,7 @@ export const useStore = create<Store>((set, get) => ({
         cover: row.cover,
         durationMs: row.durationMs,
         extra: row.extra,
+        quality: row.quality,
       });
       await get().refreshTracks();
       get().toast(`已下载到本地音乐：${name}`, "success");
