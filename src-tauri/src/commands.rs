@@ -293,76 +293,13 @@ pub async fn backup_lyric(
     Ok(LyricsPayload { synced: false, lines: vec![] })
 }
 
-/// 读取 GD音乐台兜底源配置：{ enabled, base, attribution }
-#[tauri::command]
-pub async fn gd_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    let conn = state.db.lock();
-    let enabled = db::get_setting(&conn, "gd_enabled")
-        .map(|s| s == "true")
-        .unwrap_or(false);
-    let base = db::get_setting(&conn, "gd_base")
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| crate::gdstudio::DEFAULT_BASE.to_string());
-    Ok(json!({
-        "enabled": enabled,
-        "base": base,
-        "attribution": crate::gdstudio::ATTRIBUTION,
-    }))
-}
-
-/// 开启/关闭 GD音乐台歌词兜底，并可同时改接口地址。
-/// 开启 = 用户确认接受对方 CC BY-NC 条款（见 gdstudio.rs 模块注释）。
-#[tauri::command]
-pub async fn set_gd_fallback(
-    state: State<'_, AppState>,
-    enabled: bool,
-    base: Option<String>,
-) -> Result<serde_json::Value, String> {
-    if let Some(b) = base.as_deref() {
-        // 存之前先校验，避免把内网地址落库后每次调用都被拒
-        let norm = crate::gdstudio::normalize_base(b)?;
-        let conn = state.db.lock();
-        db::set_setting(&conn, "gd_base", &norm);
-    }
-    {
-        let conn = state.db.lock();
-        db::set_setting(&conn, "gd_enabled", if enabled { "true" } else { "false" });
-    }
-    // 直接回读拼装，不去 await 另一个命令（State 跨 await 会让 future 失去 Send）
-    let conn = state.db.lock();
-    let cur_base = db::get_setting(&conn, "gd_base")
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| crate::gdstudio::DEFAULT_BASE.to_string());
-    Ok(json!({
-        "enabled": enabled,
-        "base": cur_base,
-        "attribution": crate::gdstudio::ATTRIBUTION,
-    }))
-}
-
 /// GD音乐台歌词兜底：本地/平台/网易云备用源都没歌词时才走到这里。
+/// 内置默认开启（设置页不提供开关，出处标注见 gdstudio.rs 模块注释）。
 /// 任何失败都静默返回空 payload（不弹错、不阻断播放）。
 #[tauri::command]
-pub async fn gd_lyric(
-    state: State<'_, AppState>,
-    title: String,
-    artist: String,
-) -> Result<LyricsPayload, String> {
+pub async fn gd_lyric(title: String, artist: String) -> Result<LyricsPayload, String> {
     let empty = LyricsPayload { synced: false, lines: vec![] };
-    let (enabled, base) = {
-        let conn = state.db.lock();
-        (
-            db::get_setting(&conn, "gd_enabled")
-                .map(|s| s == "true")
-                .unwrap_or(false),
-            db::get_setting(&conn, "gd_base")
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| crate::gdstudio::DEFAULT_BASE.to_string()),
-        )
-    };
-    if !enabled {
-        return Ok(empty);
-    }
+    let base = crate::gdstudio::DEFAULT_BASE.to_string();
     let title = title.trim();
     if title.is_empty() {
         return Ok(empty);
@@ -745,6 +682,8 @@ fn builtin_search(
                         duration_ms,
                         platform: "wy".into(),
                         extra: String::new(),
+                        via_gd: false,
+                        pic_id: String::new(),
                     }
                 })
                 .collect())
@@ -761,6 +700,8 @@ fn builtin_search(
                     duration_ms: s.duration_ms,
                     platform: "tx".into(),
                     extra: s.media_mid,
+                    via_gd: false,
+                    pic_id: String::new(),
                 })
                 .collect())
         }
@@ -777,6 +718,8 @@ fn builtin_search(
                     duration_ms: s.duration_ms,
                     platform: "kg".into(),
                     extra: s.id,
+                    via_gd: false,
+                    pic_id: String::new(),
                 })
                 .collect())
         }
@@ -836,6 +779,62 @@ pub async fn lx_search(
         }
     }
 
+    // 未接入任何网络音源：排行榜搜索/播放默认走内置 GD音乐台聚合源
+    // （匿名可用，无需登录；出处标注见 gdstudio.rs 模块注释）。
+    // GD 无结果时再落回内置平台直连，保证搜索尽量有产出。
+    if picked.is_none() {
+        let gd_source = match want_platform.as_str() {
+            "wy" => "netease",
+            "tx" => "qq",
+            "kg" => "kg",
+            "kw" => "kw",
+            "mg" => "mg",
+            "" => "netease",
+            other => {
+                // 未知平台码：按 netease 搜，保底聚合源可用
+                eprintln!("[lx_search] 未知平台码 {other}，按 netease 走 GD 源");
+                "netease"
+            }
+        };
+        let gd_songs = crate::gdstudio::search(
+            crate::gdstudio::DEFAULT_BASE,
+            gd_source,
+            &kw,
+            limit as u32,
+        );
+        if !gd_songs.is_empty() {
+            let songs: Vec<LxSearchSong> = gd_songs
+                .into_iter()
+                .map(|s| {
+                    let url_id = if s.url_id.trim().is_empty() {
+                        s.id.clone()
+                    } else {
+                        s.url_id
+                    };
+                    let pic_id = s.pic_id;
+                    LxSearchSong {
+                        id: s.id,
+                        title: s.name,
+                        artist: s.artist.join(" / "),
+                        album: s.album,
+                        duration_ms: 0,
+                        platform: s.source,
+                        extra: url_id,
+                        via_gd: true,
+                        pic_id,
+                    }
+                })
+                .collect();
+            return Ok(json!({
+                "via": "GD音乐台（内置源）",
+                "sourceId": serde_json::Value::Null,
+                "sourceName": crate::gdstudio::ATTRIBUTION,
+                "platform": gd_source,
+                "songs": songs,
+            }));
+        }
+    }
+
     match builtin_search(&state, &want_platform, &kw, limit) {
         Ok(songs) => {
             let used_platform = songs.first().map(|s| s.platform.clone()).unwrap_or(used_platform);
@@ -877,6 +876,86 @@ pub struct LxPlaySongReq {
     /// 取链扩展上下文（酷狗 hash / QQ media_mid）
     #[serde(default)]
     pub extra: Option<String>,
+    /// 来自内置 GD音乐台源：走 gdstudio::song_url 匿名取链
+    #[serde(default)]
+    pub via_gd: bool,
+    /// GD 源封面 id（types=pic），用于播放时补齐专辑图
+    #[serde(default)]
+    pub pic_id: String,
+}
+
+/// 内置 GD音乐台源的播放链路：匿名取链 → 校验直链 → 补齐封面 → 统一在线播放。
+///
+/// 与 kugou_play 同构：直链交给 `play_url`（缓存下载 + 解码），因此进度、
+/// 歌词、SMTC、最近播放、下载管理登记等行为与其它在线源完全一致。
+/// `extra` 携带搜索阶段透传的 url_id（types=url 的取链 id）。
+fn gd_play_song(state: &State<AppState>, req: &LxPlaySongReq) -> Result<(), String> {
+    let quality = {
+        let conn = state.db.lock();
+        db::get_setting(&conn, "quality").unwrap_or_else(|| "high".to_string())
+    };
+    // 期望码率上限：无损给 999 让接口返回可用的最高音质
+    let br: u32 = match quality.as_str() {
+        "standard" => 128,
+        "medium" => 192,
+        "lossless" => 999,
+        _ => 320,
+    };
+    let gd_source = if req.platform.trim().is_empty() {
+        "netease"
+    } else {
+        req.platform.trim()
+    };
+    let url_id = match req.extra.as_deref() {
+        Some(e) if !e.trim().is_empty() => e.trim().to_string(),
+        _ => req.song_id.clone(),
+    };
+    let (url, br_actual) =
+        crate::gdstudio::song_url(crate::gdstudio::DEFAULT_BASE, gd_source, &url_id, br)?;
+    // 直链随后由引擎发起服务端下载，SSRF 校验已在 song_url 内完成（双保险）
+    crate::gdstudio::validate_remote_url(&url)?;
+
+    // 封面：播放请求未带图时用 GD 的 pic 接口补齐（缺失静默，不影响播放）
+    let cover = if req.cover.trim().is_empty() && !req.pic_id.trim().is_empty() {
+        crate::gdstudio::pic_url(crate::gdstudio::DEFAULT_BASE, gd_source, &req.pic_id)
+    } else {
+        req.cover.clone()
+    };
+
+    {
+        let conn = state.db.lock();
+        db::record_play_online(
+            &conn,
+            "gd",
+            &req.song_id,
+            &req.title,
+            &req.artist,
+            &req.album,
+            &cover,
+            req.duration_ms as i64,
+            "",
+            false,
+        );
+    }
+    let label = quality_tag("flac", br_actual as i64);
+    let info = TrackInfo {
+        id: None,
+        kind: "gd".into(),
+        path: String::new(),
+        title: req.title.clone(),
+        artist: req.artist.clone(),
+        album: req.album.clone(),
+        cover,
+        duration_ms: req.duration_ms,
+        nid: None,
+        qid: None,
+        kgid: None,
+        quality: Some(label),
+        lx_source_id: None,
+        lx_platform: None,
+        lx_song_id: None,
+    };
+    engine_clone(state).play_url(url, info)
 }
 
 /// 未接入音源时的播放回退：直接走内置平台取链（wy→网易云、tx→QQ、kg→酷狗）。
@@ -979,6 +1058,8 @@ pub async fn lx_play_song(
     duration_ms: Option<u64>,
     quality: Option<String>,
     extra: Option<String>,
+    via_gd: Option<bool>,
+    pic_id: Option<String>,
 ) -> Result<(), String> {
     // 前端以扁平参数调用（与 lx_search / lx_resolve_url 一致），这里收敛成内部结构体。
     #[allow(unused_mut)]
@@ -993,6 +1074,8 @@ pub async fn lx_play_song(
         duration_ms: duration_ms.unwrap_or(0),
         quality: quality.filter(|q| !q.trim().is_empty()),
         extra: extra.filter(|e| !e.trim().is_empty()),
+        via_gd: via_gd.unwrap_or(false),
+        pic_id: pic_id.unwrap_or_default(),
     };
     if req.song_id.trim().is_empty() {
         return Err("歌曲 ID 无效，无法取链".into());
@@ -1001,8 +1084,12 @@ pub async fn lx_play_song(
     if req.platform.trim().is_empty() && req.source_id <= 0 {
         req.platform = "kg".to_string();
     }
-    // 未接入音源（sourceId <= 0）：回退内置平台取链，保证页面开箱可用
+    // 未接入音源（sourceId <= 0）：GD 源结果走 GD 取链，其余回退内置平台，
+    // 保证页面开箱可用
     if req.source_id <= 0 {
+        if req.via_gd {
+            return gd_play_song(&state, &req);
+        }
         return builtin_play_song(&state, &req);
     }
     let (base, src_name, platforms, api_mode) = {

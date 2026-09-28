@@ -106,10 +106,7 @@ interface Store {
   lyrics: LyricsPayload | null;
   lyricsLoading: boolean;
   lyricsFor: string | null;
-  /** GD音乐台歌词兜底开关（默认关闭：对方为 CC BY-NC 条款，需用户自行确认） */
-  gdEnabled: boolean;
-  /** GD音乐台接口地址（可配置，接口迁移时用户自改） */
-  gdBase: string;
+  /** GD音乐台歌词兜底：内置默认开启，无开关（出处标注见 gdstudio.rs） */
 
   // 网易云在线曲库
   neteaseResults: NeteaseTrack[];
@@ -398,9 +395,6 @@ interface Store {
   reorderPlaylists(ids: number[]): Promise<void>;
 
   loadLyricsByKey(key: string): Promise<void>;
-  /** 读取/设置 GD音乐台歌词兜底源 */
-  refreshGdFallback(): Promise<void>;
-  setGdFallback(enabled: boolean, base?: string): Promise<void>;
   loadLyrics(trackId: number): Promise<void>;
   applyMediaControl(action: string, value?: number): void;
 }
@@ -625,8 +619,6 @@ export const useStore = create<Store>((set, get) => ({
   lyrics: null,
   lyricsLoading: false,
   lyricsFor: null,
-  gdEnabled: false,
-  gdBase: "",
 
   neteaseResults: [],
   neteaseTotal: 0,
@@ -851,7 +843,7 @@ export const useStore = create<Store>((set, get) => ({
     void get().refreshDownloads();
 
     try {
-      const [settings, tracks, folders, playlists, sources, neteaseStatus, qqStatus, gdStatus] =
+      const [settings, tracks, folders, playlists, sources, neteaseStatus, qqStatus] =
         await Promise.all([
           api.getSettings(),
           api.listTracks(),
@@ -860,10 +852,6 @@ export const useStore = create<Store>((set, get) => ({
           api.listSources(),
           api.neteaseStatus(),
           api.qqStatus(),
-          // GD 兜底开关也要在启动时恢复：gd_status 读的是 DB 落库值。
-          // 不拉的话重启后 store 永远是初始 false，即使设置里开着、
-          // 歌词兜底判断 get().gdEnabled 也永远不触发（用户感知"没生效"）。
-          api.gdStatus(),
         ]);
       set({
         theme: loadTheme(),
@@ -880,11 +868,6 @@ export const useStore = create<Store>((set, get) => ({
         folders,
         playlists,
         sources,
-        // GD 兜底开关也要在启动时恢复：gdStatus 读的是 DB 落库值。
-        // 不拉的话重启后 store 永远是 false，即使设置里开着、
-        // 歌词兜底判断 get().gdEnabled 也永远不触发（用户感知"没生效"）。
-        gdEnabled: gdStatus.enabled,
-        gdBase: gdStatus.base,
         neteaseLoggedIn: neteaseStatus.loggedIn,
         neteaseNickname: neteaseStatus.nickname,
         qqLoggedIn: qqStatus.loggedIn,
@@ -901,8 +884,6 @@ export const useStore = create<Store>((set, get) => ({
       get().refreshRecentOnline();
       get().loadManualOrder("library");
       get().loadManualOrder("liked");
-      // 歌词兜底源开关（不阻塞启动，失败保持默认关闭）
-      get().refreshGdFallback();
     } catch (e) {
       set({ ready: true });
       get().toast(`初始化失败：${e}`, "error");
@@ -2405,8 +2386,8 @@ export const useStore = create<Store>((set, get) => ({
           const title = cur?.title ?? "";
           const artist = cur?.artist ?? "";
           let backup = await api.backupLyric(title, artist);
-          // 网易云也没匹配上，再试 GD音乐台（设置里开启才生效，失败静默）
-          if (backup.lines.length === 0 && get().gdEnabled) {
+          // 网易云也没匹配上，再试 GD音乐台（内置默认开启，失败静默）
+          if (backup.lines.length === 0) {
             try {
               backup = await api.gdLyric(title, artist);
             } catch {
@@ -2471,33 +2452,6 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   async loadLyrics(trackId) {    get().loadLyricsByKey(`track-${trackId}`);
-  },
-
-  /** 读取 GD音乐台兜底源配置（启动与进设置页时调用） */
-  async refreshGdFallback() {
-    try {
-      const s = await api.gdStatus();
-      set({ gdEnabled: s.enabled, gdBase: s.base });
-    } catch {
-      /* 读不到就保持默认关闭 */
-    }
-  },
-
-  async setGdFallback(enabled, base) {
-    const s = await api.setGdFallback(enabled, base);
-    set({ gdEnabled: s.enabled, gdBase: s.base });
-    // 立刻用当前曲目验证一次：开了就重载歌词（会重新走兜底链），免得用户
-    // 以为没生效；关掉则清掉可能来自兜底源的歌词
-    const key = lyricsKeyFor(get().current);
-    if (key) {
-      if (enabled) {
-        // 清掉 lyricsFor 让 loadLyricsByKey 不被"同 key 已加载"短路掉
-        set({ lyricsFor: null });
-        get().loadLyricsByKey(key);
-      } else if (get().lyrics) {
-        set({ lyrics: null, lyricsFor: null });
-      }
-    }
   },
 
   applyMediaControl(action, value) {

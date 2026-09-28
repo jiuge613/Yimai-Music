@@ -718,6 +718,8 @@ fn parse_song(v: &serde_json::Value) -> LxSearchSong {
         // 酷狗 hash / QQ media_mid：取链时可能需要原样透传
         extra: first_str(v, &["hash", "media_mid", "mediaMid", "strMediaMid"])
             .unwrap_or_default(),
+        via_gd: false,
+        pic_id: String::new(),
     }
 }
 

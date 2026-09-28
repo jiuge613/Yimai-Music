@@ -114,10 +114,14 @@ export interface LxSearchSong {
   artist?: string;
   album?: string;
   durationMs?: number;
-  /** 平台代码：wy / tx / kg / kw … */
+  /** 平台代码：wy / tx / kg / kw …；GD 内置源时为 GD 平台码（netease/qq/kg/kw/mg） */
   platform?: string;
-  /** 取链扩展上下文（酷狗 hash / QQ media_mid） */
+  /** 取链扩展上下文（酷狗 hash / QQ media_mid）；GD 源时为 url_id */
   extra?: string;
+  /** 来自内置 GD音乐台源：播放走 gdstudio 匿名取链而非 LX 音源/平台登录链路 */
+  viaGd?: boolean;
+  /** GD 源封面 id（播放时补齐专辑图用），非 GD 结果为空 */
+  picId?: string;
 }
 
 /** 排行榜搜索返回 */

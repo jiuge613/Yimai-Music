@@ -9,7 +9,6 @@ import {
   Headphones,
   Link2,
   Loader2,
-  MicVocal,
   RefreshCw,
   RotateCcw,
   ScrollText,
@@ -124,44 +123,6 @@ export default function SettingsView() {
   const [exclBusy, setExclBusy] = useState(false);
   const [exclProbe, setExclProbe] = useState<ExclusiveProbe | null>(null);
   const [exclProbing, setExclProbing] = useState(false);
-  // GD音乐台歌词兜底
-  const gdEnabled = useStore((s) => s.gdEnabled);
-  const gdBase = useStore((s) => s.gdBase);
-  const setGdFallback = useStore((s) => s.setGdFallback);
-  const [gdAttr, setGdAttr] = useState("GD音乐台 (music.gdstudio.xyz)");
-  const [gdDraftBase, setGdDraftBase] = useState("");
-  const [gdBusy, setGdBusy] = useState(false);
-
-  const toggleGd = async (on: boolean) => {
-    setGdBusy(true);
-    try {
-      await setGdFallback(on, on && gdDraftBase.trim() ? gdDraftBase.trim() : undefined);
-      setGdDraftBase("");
-      useStore
-        .getState()
-        .toast(
-          on ? "已开启歌词兜底源，本曲已重新匹配歌词" : "已关闭歌词兜底源",
-          "success"
-        );
-    } catch (e) {
-      useStore.getState().toast(String(e), "error");
-    } finally {
-      setGdBusy(false);
-    }
-  };
-
-  const saveGdBase = async () => {
-    setGdBusy(true);
-    try {
-      await setGdFallback(gdEnabled, gdDraftBase.trim());
-      setGdDraftBase("");
-      useStore.getState().toast("接口地址已保存", "success");
-    } catch (e) {
-      useStore.getState().toast(String(e), "error");
-    } finally {
-      setGdBusy(false);
-    }
-  };
 
   const refreshExclusive = useCallback(async () => {
     try {
@@ -792,60 +753,6 @@ export default function SettingsView() {
           <p className="text-[11.5px] text-[var(--ink-3)] mt-2">
             在线歌曲播放时会自动缓存到应用数据目录（同一首歌同一音质只缓存一份，重复播放不再下载）。
             超过上限后从最旧缓存开始自动清理，正在播放的文件不受影响；「不限制」则永久保留。
-          </p>
-        </section>
-
-        {/* 歌词兜底源（GD音乐台） */}
-        <section style={{ ["--row-idx" as string]: 9 }} className="anim-row glass rounded-2xl p-5">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-[14.5px] font-semibold">歌词兜底源</h2>
-            <span className="text-[10.5px] text-[var(--ink-3)]">出处：{gdAttr}</span>
-          </div>
-          <div className="flex items-center gap-4">
-            <MicVocal size={14} className="text-[var(--ink-2)] shrink-0" />
-            <button
-              className={`relative w-10 h-[22px] rounded-full transition-colors shrink-0 ${
-                gdEnabled ? "bg-[var(--accent)]" : "bg-[var(--shade-strong)]"
-              } ${gdBusy ? "opacity-60" : ""}`}
-              onClick={() => toggleGd(!gdEnabled)}
-              disabled={gdBusy}
-              title={gdEnabled ? "关闭歌词兜底源" : "开启歌词兜底源"}
-            >
-              <span
-                className={`absolute top-[3px] w-4 h-4 rounded-full bg-white shadow transition-all ${
-                  gdEnabled ? "left-[21px]" : "left-[3px]"
-                }`}
-              />
-            </button>
-            <span className="text-[11.5px] text-[var(--ink-3)] leading-relaxed">
-              {gdEnabled
-                ? "已开启 · 仅在本地标签、平台接口、网易云都取不到歌词时才会调用"
-                : "默认关闭。本地标签与各平台都没歌词时，用歌名+歌手到 GD音乐台 检索一次"}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-3 mt-3">
-            <span className="text-[12.5px] text-[var(--ink-2)] w-[80px] shrink-0">接口地址</span>
-            <input
-              type="text"
-              value={gdDraftBase || gdBase}
-              onChange={(e) => setGdDraftBase(e.target.value)}
-              placeholder={gdBase}
-              className="flex-1 h-9 rounded-lg bg-[var(--shade)] border border-[var(--line)] px-2.5 text-[12px] text-[var(--ink)] outline-none focus:border-[rgba(240,162,74,0.45)]"
-            />
-            <button
-              className="btn-secondary !py-1.5 !px-3 shrink-0"
-              onClick={saveGdBase}
-              disabled={gdBusy || !gdDraftBase.trim()}
-            >
-              保存
-            </button>
-          </div>
-
-          <p className="text-[11.5px] text-[var(--ink-3)] mt-2 leading-relaxed">
-            对方声明为 <b>CC BY-NC 4.0</b>，仅供学习参考、禁止商用与传播，并要求注明出处。
-            开启即表示你自行确认自己的使用符合其条款；地址可改为自建镜像（禁止内网/环回地址）。
-            官方限流 5 分钟 50 次，本功能仅作最后兜底、失败静默不打扰。
           </p>
         </section>
 

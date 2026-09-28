@@ -156,6 +156,13 @@ pub struct LxSearchSong {
     /// 取链扩展上下文（酷狗 hash / QQ media_mid 等），原样透传给 url.php
     #[serde(default)]
     pub extra: String,
+    /// 来自内置 GD音乐台源：取链走 gdstudio::song_url（匿名直链）而非
+    /// LX 音源/内置平台登录链路
+    #[serde(default)]
+    pub via_gd: bool,
+    /// GD 源的封面 id（types=pic 用），非 GD 结果为空
+    #[serde(default)]
+    pub pic_id: String,
 }
 
 #[derive(Serialize, Clone, Debug)]

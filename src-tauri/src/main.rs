@@ -591,8 +591,6 @@ fn main() {
             commands::drop_paths,
             commands::get_lyrics,
             commands::backup_lyric,
-            commands::gd_status,
-            commands::set_gd_fallback,
             commands::gd_lyric,
             commands::like_track,
             commands::list_playlists,

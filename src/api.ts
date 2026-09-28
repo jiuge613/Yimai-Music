@@ -3,7 +3,6 @@ import type {
   ExclusiveInfo,
   ExclusiveProbe,
   Folder,
-  GdStatus,
   LyricsPayload,
   NeteaseTrack,
   Playlist,
@@ -41,12 +40,8 @@ export const api = {
   /** 备用歌词源（兜底）：按「歌名+歌手」搜网易云取最佳匹配歌词，主源无歌词时调用 */
   backupLyric: (title: string, artist: string) =>
     invoke<LyricsPayload>("backup_lyric", { title, artist }),
-  // ---------- GD音乐台 歌词兜底（默认关闭，需用户在设置里自行确认 CC BY-NC 条款） ----------
   gdLyric: (title: string, artist: string) =>
     invoke<LyricsPayload>("gd_lyric", { title, artist }),
-  gdStatus: () => invoke<GdStatus>("gd_status"),
-  setGdFallback: (enabled: boolean, base?: string) =>
-    invoke<GdStatus>("set_gd_fallback", { enabled, base: base ?? null }),
   likeTrack: (id: number, liked: boolean) =>
     invoke<void>("like_track", { id, liked }),
   /** 移除本地歌曲记录（仅标记，不删磁盘文件） */
@@ -119,6 +114,8 @@ export const api = {
     durationMs?: number;
     quality?: string;
     extra?: string;
+    viaGd?: boolean;
+    picId?: string;
   }) => invoke<void>("lx_play_song", req),
   /** LX 音源歌词：凭播放时携带的音源身份回查 lyric.php */
   lxLyric: (sourceId: number, platform: string, songId: string) =>

@@ -144,7 +144,7 @@ export default function RankingView() {
       setPlayingId(s.id);
       try {
         await api.lxPlaySong({
-          sourceId: sid,
+          sourceId: s.viaGd ? 0 : sid,
           platform: s.platform || resultPlatform || platform || "kg",
           songId: s.id,
           title: s.title,
@@ -152,6 +152,8 @@ export default function RankingView() {
           album: s.album ?? "",
           durationMs: s.durationMs ?? 0,
           extra: s.extra ?? "",
+          viaGd: s.viaGd ?? false,
+          picId: s.picId ?? "",
         });
       } catch (e) {
         toast(`播放失败：${e}`, "error");
