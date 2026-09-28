@@ -584,12 +584,14 @@ html[data-theme="light"][data-skin="on"] .glass {
    百行歌词直接拖垮 GPU 帧预算 */
 .lyric-line {
   transform-origin: center;
+  /* 行切换过渡 0.5s→0.25s：渐变完成时间越长，"当前行点亮"的视觉呈现
+     越晚——用户感知为歌词比歌慢半拍。缩短到 0.25s 保住平滑又少一半滞后 */
   transition:
-    color 0.5s ease,
-    font-size 0.5s cubic-bezier(0.2, 0.8, 0.2, 1),
-    font-weight 0.5s ease,
-    opacity 0.5s ease,
-    transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+    color 0.25s ease,
+    font-size 0.25s cubic-bezier(0.2, 0.8, 0.2, 1),
+    font-weight 0.25s ease,
+    opacity 0.25s ease,
+    transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
   color: var(--ink-2);
   /* 未唱行 20px→22px：rAF 会把当前行直接写成 25px，原 20px 与已唱差 5px，
      未唱行在播放页里显得过小；22px 保住层级差（25/22）又足够醒目 */

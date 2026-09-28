@@ -119,7 +119,7 @@ impl<S: Source<Item = f32>> EqSource<S> {
         Self::with_base(inner, shared, pos_ms, 0.0)
     }
 
-    /// base_ms：流起始的时间偏移（skip_duration 跳过的部分）
+    /// base_ms：流起始的时间偏移（try_seek 跳过的部分）
     pub fn with_base(
         inner: S,
         shared: Arc<EqShared>,
