@@ -40,8 +40,12 @@ export const api = {
   /** 备用歌词源（兜底）：按「歌名+歌手」搜网易云取最佳匹配歌词，主源无歌词时调用 */
   backupLyric: (title: string, artist: string) =>
     invoke<LyricsPayload>("backup_lyric", { title, artist }),
+  /** GD音乐台歌词兜底：按歌名+歌手检索并取回 LRC（内置默认开启） */
   gdLyric: (title: string, artist: string) =>
     invoke<LyricsPayload>("gd_lyric", { title, artist }),
+  /** 内置源歌曲歌词：凭播放时的 GD 身份直接回查，不用先检索 */
+  gdSongLyric: (source: string, songId: string) =>
+    invoke<LyricsPayload>("gd_song_lyric", { source, songId }),
   likeTrack: (id: number, liked: boolean) =>
     invoke<void>("like_track", { id, liked }),
   /** 移除本地歌曲记录（仅标记，不删磁盘文件） */
@@ -135,6 +139,19 @@ export const api = {
     extra?: string;
     quality?: string;
   }) => invoke<string>("lx_download", { req }),
+  /** 下载内置源（GD音乐台）曲目到用户设置的保存目录。
+   *  source 接受 LX 平台码（wy/tx/kg…）或 GD 源代码；歌名歌手即可定位，
+   *  不依赖播放时的临时上下文 */
+  gdDownload: (req: {
+    source?: string;
+    songId?: string;
+    title: string;
+    artist: string;
+    album: string;
+    cover: string;
+    durationMs?: number;
+    quality?: string;
+  }) => invoke<string>("gd_download", { req }),
   neteaseSearch: (keyword: string, offset: number) =>
     invoke<{ total: number; songs: NeteaseTrack[] }>("netease_search", {
       keyword,

@@ -242,6 +242,7 @@ export default function PlayerBar({ centered = false }: { centered?: boolean }) 
   const recentOnline = useStore((s) => s.recentOnline);
   const toggleLikeOnline = useStore((s) => s.toggleLikeOnline);
   const downloadLx = useStore((s) => s.downloadLx);
+  const downloadGd = useStore((s) => s.downloadGd);
   const togglePlay = useStore((s) => s.togglePlay);
   const next = useStore((s) => s.next);
   const prev = useStore((s) => s.prev);
@@ -501,47 +502,61 @@ export default function PlayerBar({ centered = false }: { centered?: boolean }) 
 
         {/* 右侧控制 */}
         <div className="flex items-center gap-2 w-[260px] min-w-[200px] justify-end">
-          {/* 下载歌曲（仅 LX 音源曲目显示）：点按钮先弹音质档位，选中即按该档下载 */}
-          {current &&
-            current.kind === "url" &&
-            current.lxSourceId != null &&
-            !!current.lxPlatform &&
-            !!current.lxSongId && (
-              <div className="relative flex items-center">
-                <button
-                  className={`btn-ghost w-9 h-9 ${dlOpen ? "!text-[var(--accent)]" : ""}`}
-                  onClick={() => setDlOpen((v) => !v)}
-                  aria-expanded={dlOpen}
-                  title="下载歌曲到本地音乐（选音质）"
-                >
-                  <Download size={16} />
-                </button>
-                {dlOpen && (
-                  <>
-                    <div
-                      className="fixed inset-0 z-[60]"
-                      onClick={() => setDlOpen(false)}
-                    />
-                    <div
-                      className="absolute bottom-[42px] right-0 z-[61] w-[176px] rounded-2xl py-1.5"
-                      style={{
-                        background: "var(--bar-glass)",
-                        backdropFilter:
-                          "blur(var(--bar-blur, 12px)) saturate(1.2)",
-                        border: "1px solid var(--bar-line)",
-                        boxShadow: "var(--bar-shadow)",
-                      }}
-                    >
-                      <div className="px-3 pt-1 pb-1.5 text-[11px] text-[var(--ink-3)]">
-                        选择下载音质
-                      </div>
-                      {QUALITIES.map((q) => {
-                        const on = q.key === quality;
-                        return (
-                          <button
-                            key={q.key}
-                            onClick={() => {
-                              setDlOpen(false);
+        {/* 下载歌曲（网络源 / 内置源曲目显示）：点按钮先弹音质档，选中即按该档下载。
+            网络源凭 lxSourceId 回到原音源取链；内置源按歌名歌手走 GD 直下，
+            两者都落进用户设置的保存目录 */}
+        {current &&
+          !!current.lxSongId &&
+          (current.kind === "url"
+            ? current.lxSourceId != null && !!current.lxPlatform
+            : current.kind === "gd") && (
+            <div className="relative flex items-center">
+              <button
+                className={`btn-ghost w-9 h-9 ${dlOpen ? "!text-[var(--accent)]" : ""}`}
+                onClick={() => setDlOpen((v) => !v)}
+                aria-expanded={dlOpen}
+                title="下载歌曲到本地音乐（选音质）"
+              >
+                <Download size={16} />
+              </button>
+              {dlOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-[60]"
+                    onClick={() => setDlOpen(false)}
+                  />
+                  <div
+                    className="absolute bottom-[42px] right-0 z-[61] w-[176px] rounded-2xl py-1.5"
+                    style={{
+                      background: "var(--bar-glass)",
+                      backdropFilter:
+                        "blur(var(--bar-blur, 12px)) saturate(1.2)",
+                      border: "1px solid var(--bar-line)",
+                      boxShadow: "var(--bar-shadow)",
+                    }}
+                  >
+                    <div className="px-3 pt-1 pb-1.5 text-[11px] text-[var(--ink-3)]">
+                      选择下载音质
+                    </div>
+                    {QUALITIES.map((q) => {
+                      const on = q.key === quality;
+                      return (
+                        <button
+                          key={q.key}
+                          onClick={() => {
+                            setDlOpen(false);
+                            if (current.kind === "gd") {
+                              downloadGd({
+                                source: current.lxPlatform || "netease",
+                                songId: current.lxSongId!,
+                                name: current.title,
+                                artist: current.artist,
+                                album: current.album,
+                                cover: current.cover,
+                                durationMs: current.durationMs,
+                                quality: q.key,
+                              });
+                            } else {
                               downloadLx({
                                 sourceId: current.lxSourceId!,
                                 platform: current.lxPlatform!,
@@ -553,23 +568,24 @@ export default function PlayerBar({ centered = false }: { centered?: boolean }) 
                                 durationMs: current.durationMs,
                                 quality: q.key,
                               });
-                            }}
-                            className="w-full px-3 h-9 flex items-center gap-2 text-[12.5px] transition-colors text-[var(--ink-2)] hover:text-[var(--ink)]"
-                          >
-                            {q.label}
-                            <span className="text-[10.5px] text-[var(--ink-3)]">
-                              {q.desc}
-                            </span>
-                            {on && (
-                              <Check
-                                size={13}
-                                className="ml-auto text-[var(--accent)]"
-                                strokeWidth={2.6}
-                              />
-                            )}
-                          </button>
-                        );
-                      })}
+                            }
+                          }}
+                          className="w-full px-3 h-9 flex items-center gap-2 text-[12.5px] transition-colors text-[var(--ink-2)] hover:text-[var(--ink)]"
+                        >
+                          {q.label}
+                          <span className="text-[10.5px] text-[var(--ink-3)]">
+                            {q.desc}
+                          </span>
+                          {on && (
+                            <Check
+                              size={13}
+                              className="ml-auto text-[var(--accent)]"
+                              strokeWidth={2.6}
+                            />
+                          )}
+                        </button>
+                      );
+                    })}
                     </div>
                   </>
                 )}

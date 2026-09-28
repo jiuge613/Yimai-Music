@@ -352,6 +352,17 @@ interface Store {
     /** 本次下载指定的音质档；缺省用设置里的默认音质 */
     quality?: string;
   }): Promise<void>;
+  /** 下载内置源（GD音乐台）曲目；source 传平台码或 GD 源代码皆可 */
+  downloadGd(row: {
+    source?: string;
+    songId?: string;
+    name: string;
+    artist: string;
+    album: string;
+    cover: string;
+    durationMs?: number;
+    quality?: string;
+  }): Promise<void>;
   refreshLikedOnline(): Promise<void>;
   refreshRecentOnline(): Promise<void>;
   addOnlineToPlaylist(
@@ -425,6 +436,9 @@ function lyricsKeyFor(p: { kind: string; id?: number | null; nid?: number | null
   if (p.kind === "kugou" && p.kgid != null) return `kug-${p.kgid}`;
   if (p.kind === "url" && p.lxSourceId != null && p.lxSongId != null)
     return `lx-${p.lxSourceId}-${p.lxPlatform ?? ""}-${p.lxSongId}`;
+  // 内置源（GD音乐台）：平台码与曲目 id 由后端随播放状态下发
+  if (p.kind === "gd" && p.lxSongId != null)
+    return `gd-${p.lxPlatform ?? "netease"}-${p.lxSongId}`;
   return null;
 }
 
@@ -2095,6 +2109,27 @@ export const useStore = create<Store>((set, get) => ({
     }
   },
 
+  async downloadGd(row) {
+    const qLabel = QUALITIES.find((q) => q.key === row.quality)?.label;
+    get().toast(qLabel ? `开始下载（${qLabel}）…` : "开始下载…", "info");
+    try {
+      const name = await api.gdDownload({
+        source: row.source,
+        songId: row.songId,
+        title: row.name,
+        artist: row.artist,
+        album: row.album,
+        cover: row.cover,
+        durationMs: row.durationMs,
+        quality: row.quality,
+      });
+      await get().refreshTracks();
+      get().toast(`已下载到本地音乐：${name}`, "success");
+    } catch (e) {
+      get().toast(String(e), "error");
+    }
+  },
+
   async refreshLikedOnline() {
     try {
       const list = await api.likedOnlineList();
@@ -2364,54 +2399,57 @@ export const useStore = create<Store>((set, get) => ({
     set({ lyricsLoading: true, lyricsFor: key, lyrics: null });
     const parts = key.split("-");
     const kind = parts[0];
-    const id = parts.slice(1).join("-");
+    // 主源：任何异常都只当作"这一路没取到"，绝不中断后面的兜底链
+    let primary: LyricsPayload | null = null;
     try {
-      const payload =
+      primary =
         kind === "net"
-          ? await api.neteaseLyric(Number(id))
+          ? await api.neteaseLyric(Number(parts[1]))
           : kind === "qq"
-            ? await api.qqLyric(id)
+            ? await api.qqLyric(parts.slice(1).join("-"))
             : kind === "kug"
-              ? await api.kugouLyric(id)
+              ? await api.kugouLyric(parts.slice(1).join("-"))
               : kind === "lx"
                 ? await api.lxLyric(
                     Number(parts[1] ?? 0),
                     parts[2] ?? "",
                     parts.slice(3).join("-")
                   )
-                : await api.getLyrics(Number(id));
-      if (get().lyricsFor === key) {
-        const lines = payload?.lines ?? [];
-        // 主源取到歌词：直接用；取不到：逐级兜底（网易云匹配 → GD音乐台）
-        if (lines.length > 0) {
-          set({ lyrics: payload, lyricsLoading: false });
-          pushDesktopLyrics(get());
-        } else {
-          const cur = get().current;
-          const title = cur?.title ?? "";
-          const artist = cur?.artist ?? "";
-          let backup = await api.backupLyric(title, artist);
-          // 网易云也没匹配上，再试 GD音乐台（内置默认开启，失败静默）
-          if (backup.lines.length === 0) {
-            try {
-              backup = await api.gdLyric(title, artist);
-            } catch {
-              /* 兜底源失败不打扰用户 */
-            }
-          }
-          if (get().lyricsFor === key) {
-            const ok = backup.lines.length > 0;
-            set({
-              lyrics: ok ? backup : null,
-              lyricsLoading: false,
-            });
-            if (ok) pushDesktopLyrics(get());
-          }
-        }
-      }
+                : kind === "gd"
+                  ? await api.gdSongLyric(parts[1] ?? "", parts.slice(2).join("-"))
+                  : await api.getLyrics(Number(parts[1]));
     } catch {
-      if (get().lyricsFor === key) set({ lyricsLoading: false, lyrics: null });
+      primary = null;
     }
+    if (get().lyricsFor !== key) return;
+    if (primary?.lines?.length) {
+      set({ lyrics: primary, lyricsLoading: false });
+      pushDesktopLyrics(get());
+      return;
+    }
+    // 逐级兜底：网易云按歌名歌手匹配 → GD音乐台（内置默认开启）。
+    // 每一级各自容错：任一级失败（无网/接口挂/无匹配）都不影响其余级
+    const cur = get().current;
+    const title = cur?.title ?? "";
+    const artist = cur?.artist ?? "";
+    let backup: LyricsPayload | null = null;
+    try {
+      backup = await api.backupLyric(title, artist);
+    } catch {
+      backup = null;
+    }
+    if (get().lyricsFor !== key) return;
+    if (!backup?.lines?.length) {
+      try {
+        backup = await api.gdLyric(title, artist);
+      } catch {
+        backup = null;
+      }
+    }
+    if (get().lyricsFor !== key) return;
+    const ok = (backup?.lines?.length ?? 0) > 0;
+    set({ lyrics: ok ? backup : null, lyricsLoading: false });
+    if (ok) pushDesktopLyrics(get());
   },
 
   back() {

@@ -50,7 +50,7 @@ export default function NowPlaying() {
   const lineRefs = useRef<(HTMLDivElement | null)[]>([]);
   const lastActiveRef = useRef(-1);
 
-  // 歌词键：本地曲目 / 网易云 / QQ / 酷狗在线曲目
+  // 歌词键：本地曲目 / 网易云 / QQ / 酷狗在线曲目 / 网络源 / 内置源
   const lyricsKey =
     current?.kind === "track" && current.id != null
       ? `track-${current.id}`
@@ -61,10 +61,12 @@ export default function NowPlaying() {
           : current?.kind === "kugou" && current.kgid != null
             ? `kug-${current.kgid}`
             : current?.kind === "url" &&
-              current.lxSourceId != null &&
-              current.lxSongId != null
+                current.lxSourceId != null &&
+                current.lxSongId != null
               ? `lx-${current.lxSourceId}-${current.lxPlatform ?? ""}-${current.lxSongId}`
-              : null;
+              : current?.kind === "gd" && current.lxSongId != null
+                ? `gd-${current.lxPlatform ?? "netease"}-${current.lxSongId}`
+                : null;
 
   useEffect(() => {
     if (lyricsKey) {

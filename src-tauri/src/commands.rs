@@ -346,6 +346,33 @@ pub async fn gd_lyric(title: String, artist: String) -> Result<LyricsPayload, St
     Ok(LyricsPayload { synced: p.synced, lines: p.lines })
 }
 
+/// 内置源歌曲的歌词：凭播放时携带的 GD 身份（平台码 + 曲目 id）直接回查，
+/// 不必先检索。取不到时前端会再走歌名歌手兜底。
+#[tauri::command]
+pub async fn gd_song_lyric(source: String, song_id: String) -> Result<LyricsPayload, String> {
+    let empty = LyricsPayload { synced: false, lines: vec![] };
+    let src = gd_source_of(&source);
+    let id = song_id.trim().to_string();
+    if id.is_empty() {
+        return Ok(empty);
+    }
+    let base = crate::gdstudio::DEFAULT_BASE.to_string();
+    let found = tauri::async_runtime::spawn_blocking(move || {
+        crate::gdstudio::lyric(&base, &src, &id)
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .unwrap_or_default();
+    if found.trim().is_empty() {
+        return Ok(empty);
+    }
+    let p = lyrics::parse(&found);
+    if p.lines.is_empty() {
+        return Ok(empty);
+    }
+    Ok(LyricsPayload { synced: p.synced, lines: p.lines })
+}
+
 // ---------- 喜欢 / 统计 ----------
 
 #[tauri::command]
@@ -894,33 +921,19 @@ fn gd_play_song(state: &State<AppState>, req: &LxPlaySongReq) -> Result<(), Stri
         let conn = state.db.lock();
         db::get_setting(&conn, "quality").unwrap_or_else(|| "high".to_string())
     };
-    // 期望码率上限：无损给 999 让接口返回可用的最高音质
-    let br: u32 = match quality.as_str() {
-        "standard" => 128,
-        "medium" => 192,
-        "lossless" => 999,
-        _ => 320,
-    };
-    let gd_source = if req.platform.trim().is_empty() {
-        "netease"
-    } else {
-        req.platform.trim()
-    };
+    let br = gd_br_for(&quality);
+    let gd_source = gd_source_of(&req.platform);
     let url_id = match req.extra.as_deref() {
         Some(e) if !e.trim().is_empty() => e.trim().to_string(),
         _ => req.song_id.clone(),
     };
     let (url, br_actual) =
-        crate::gdstudio::song_url(crate::gdstudio::DEFAULT_BASE, gd_source, &url_id, br)?;
+        crate::gdstudio::song_url(crate::gdstudio::DEFAULT_BASE, &gd_source, &url_id, br)?;
     // 直链随后由引擎发起服务端下载，SSRF 校验已在 song_url 内完成（双保险）
     crate::gdstudio::validate_remote_url(&url)?;
 
-    // 封面：播放请求未带图时用 GD 的 pic 接口补齐（缺失静默，不影响播放）
-    let cover = if req.cover.trim().is_empty() && !req.pic_id.trim().is_empty() {
-        crate::gdstudio::pic_url(crate::gdstudio::DEFAULT_BASE, gd_source, &req.pic_id)
-    } else {
-        req.cover.clone()
-    };
+    // 封面：未带图时由内置源补齐（pic_id 优先，其次按歌名歌手检索）
+    let cover = gd_cover_fallback(&gd_source, &req.pic_id, &req.title, &req.artist, &req.cover);
 
     {
         let conn = state.db.lock();
@@ -952,11 +965,80 @@ fn gd_play_song(state: &State<AppState>, req: &LxPlaySongReq) -> Result<(), Stri
         kgid: None,
         quality: Some(label),
         lx_source_id: None,
-        lx_platform: None,
-        lx_song_id: None,
+        // 携带 GD 身份（平台码 + 曲目 id）：前端据此查歌词、显示下载按钮
+        lx_platform: Some(gd_source.clone()),
+        lx_song_id: Some(req.song_id.clone()),
     };
     engine_clone(state).play_url(url, info)
 }
+
+/// 播放/下载音质档 → GD 取链的码率上限（999 = 不限，由接口挑最佳）
+fn gd_br_for(quality: &str) -> u32 {
+    match quality.trim() {
+        "standard" => 128,
+        "medium" => 192,
+        "lossless" => 999,
+        _ => 320,
+    }
+}
+
+/// LX / 内置平台码 → GD 源代码（wy→netease、tx→qq、kg→kg…，其余按 netease 保底）
+fn gd_source_of(platform: &str) -> String {
+    match platform.trim() {
+        "wy" | "netease" => "netease".into(),
+        "tx" | "qq" => "qq".into(),
+        "kg" | "kugou" => "kg".into(),
+        "kw" => "kw".into(),
+        "mg" => "mg".into(),
+        _ => "netease".into(),
+    }
+}
+
+/// 内置源封面兜底：请求自带图优先；否则用 pic_id 直接取图；再不行按
+/// 「歌名 歌手」在 GD 检索后取图——网络源曲目通常没有 pic_id，只有这条路。
+/// 任何失败都返回空串：封面缺失只是观感问题，绝不阻断播放。
+fn gd_cover_fallback(
+    source: &str,
+    pic_id: &str,
+    title: &str,
+    artist: &str,
+    current: &str,
+) -> String {
+    if !current.trim().is_empty() {
+        return current.to_string();
+    }
+    let base = crate::gdstudio::DEFAULT_BASE;
+    if !pic_id.trim().is_empty() {
+        let u = crate::gdstudio::pic_url(base, source, pic_id);
+        if !u.is_empty() {
+            return u;
+        }
+    }
+    if title.trim().is_empty() {
+        return String::new();
+    }
+    let kw = if artist.trim().is_empty() {
+        title.to_string()
+    } else {
+        format!("{title} {artist}")
+    };
+    let songs = crate::gdstudio::search(base, source, &kw, 10);
+    let Some(hit) = crate::gdstudio::pick(&songs, title, artist) else {
+        return String::new();
+    };
+    let pid = if hit.pic_id.trim().is_empty() {
+        hit.id.clone()
+    } else {
+        hit.pic_id.clone()
+    };
+    let src = if hit.source.trim().is_empty() {
+        source
+    } else {
+        hit.source.as_str()
+    };
+    crate::gdstudio::pic_url(base, src, &pid)
+}
+
 
 /// 未接入音源时的播放回退：直接走内置平台取链（wy→网易云、tx→QQ、kg→酷狗）。
 /// 保证排行榜在未配置音源时也能播（酷狗匿名可用；网易云/QQ 需已登录）。
@@ -1148,6 +1230,16 @@ pub async fn lx_play_song(
         &api_mode,
     )?;
 
+    // 封面兜底：音源给的条目常常没有封面，用内置 GD音乐台按歌名歌手补齐，
+    // 补不到就保持空（观感问题，不阻断播放）
+    let cover = gd_cover_fallback(
+        &gd_source_of(&platform),
+        &req.pic_id,
+        &req.title,
+        &req.artist,
+        &req.cover,
+    );
+
     // 最近播放：只有能映射回内置平台的曲目才记录（否则前端无法二次播放）
     let kind = match platform.as_str() {
         "wy" => Some("netease"),
@@ -1164,7 +1256,7 @@ pub async fn lx_play_song(
             &req.title,
             &req.artist,
             &req.album,
-            &req.cover,
+            &cover,
             req.duration_ms as i64,
             req.extra.as_deref().unwrap_or(""),
             false,
@@ -1182,7 +1274,7 @@ pub async fn lx_play_song(
         },
         artist: req.artist,
         album: req.album,
-        cover: req.cover,
+        cover,
         duration_ms: req.duration_ms,
         nid: None,
         qid: None,
@@ -1242,11 +1334,50 @@ pub async fn lx_download(
 }
 
 fn lx_download_blocking(app: AppHandle, req: LxDownloadReq) -> Result<String, String> {
-    let state = app.state::<AppState>();
     let title = req.title.trim().to_string();
     if title.is_empty() {
         return Err("歌曲标题为空".into());
     }
+    let song_key = format!("{}-{}", req.source_id, req.song_id);
+    let task_id = dl_task_id("lx", &song_key);
+    // 开下即登记：进行中进「下载中」，失败带原因，完成落「已下载」，
+    // 整段都留在下载管理里，不再是"下完才冒出来一行"
+    begin_direct_download(
+        &app,
+        &task_id,
+        "lx",
+        &song_key,
+        &title,
+        &req.artist,
+        &req.album,
+        &req.cover,
+        // 平台码存进 media_mid：重试时据此选择 GD 源（wy/tx/kg…）
+        &req.platform,
+    );
+    match lx_download_inner(&app, req, &task_id) {
+        Ok((name, _dest)) => {
+            let _ = app.emit(
+                "download://task",
+                json!({ "taskId": task_id, "status": "done" }),
+            );
+            Ok(name)
+        }
+        Err(e) => {
+            fail_direct_download(&app, &task_id, &e);
+            Err(e)
+        }
+    }
+}
+
+/// LX 音源直下的实际下载流程（取链 → 落盘 → 写标签 → 入库）。
+/// 任务行的创建/收尾由调用方负责，这里只管把文件做出来。
+fn lx_download_inner(
+    app: &AppHandle,
+    req: LxDownloadReq,
+    task_id: &str,
+) -> Result<(String, std::path::PathBuf), String> {
+    let state = app.state::<AppState>();
+    let title = req.title.trim().to_string();
     let (base, api_mode, src_name, platforms) = {
         let conn = state.db.lock();
         let item = db::lx_list_sources(&conn)
@@ -1322,7 +1453,8 @@ fn lx_download_blocking(app: AppHandle, req: LxDownloadReq) -> Result<String, St
         if artist.is_empty() { "Unknown" } else { &artist },
         sanitize_filename(&title)
     );
-    let dest = download_to_dir(&app, "lx", &url, &dir, &stem, &ext, &title, None)?;
+    // 进度写进任务行（带 task_id），下载管理页能看到实时百分比
+    let dest = download_to_dir(app, "lx", &url, &dir, &stem, &ext, &title, Some(task_id))?;
     let name = dest
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -1337,23 +1469,24 @@ fn lx_download_blocking(app: AppHandle, req: LxDownloadReq) -> Result<String, St
     if track.duration == 0.0 && req.duration_ms > 0 {
         track.duration = req.duration_ms as f64 / 1000.0;
     }
-    let song_key = format!("{}-{}", req.source_id, req.song_id);
-    let task_id = dl_task_id("lx", &song_key);
     {
         let conn = state.db.lock();
         db::upsert_track(&conn, &track);
-        db::mark_online_downloaded(&conn, "lx", &song_key);
+        db::mark_online_downloaded(
+            &conn,
+            "lx",
+            &format!("{}-{}", req.source_id, req.song_id),
+        );
         let _ = db::add_folder(&conn, &dir.to_string_lossy());
-        // 即时下载也要登记任务行，否则这首歌在下载管理里根本看不到，
-        // "打开所在位置"也就没有指向真实保存目录的行
+        // 收尾成 done：真实文件路径落库，"打开所在位置"与删除文件都靠它
         let now = db::now_secs();
         db::upsert_download_task(
             &conn,
             &crate::db::DownloadTask {
-                id: task_id.clone(),
+                id: task_id.to_string(),
                 kind: "lx".into(),
-                song_id: song_key,
-                media_mid: String::new(),
+                song_id: format!("{}-{}", req.source_id, req.song_id),
+                media_mid: req.platform.clone(),
                 title: title.clone(),
                 artist: req.artist.clone(),
                 album: req.album.clone(),
@@ -1368,8 +1501,278 @@ fn lx_download_blocking(app: AppHandle, req: LxDownloadReq) -> Result<String, St
             },
         );
     }
-    // 通知下载管理页刷新（监听器收到后整刷列表）
-    let _ = app.emit("download://task", json!({ "taskId": task_id, "status": "done" }));
+    Ok((name, dest))
+}
+
+/// 直下任务：开下即登记为 downloading，让它出现在下载管理「下载中」页签，
+/// 进度事件凭 task_id 就地更新该行。平台码存 media_mid 供重试定位 GD 源。
+fn begin_direct_download(
+    app: &AppHandle,
+    task_id: &str,
+    kind: &str,
+    song_id: &str,
+    title: &str,
+    artist: &str,
+    album: &str,
+    cover: &str,
+    platform: &str,
+) {
+    let st = app.state::<AppState>();
+    let now = db::now_secs();
+    {
+        let conn = st.db.lock();
+        db::upsert_download_task(
+            &conn,
+            &crate::db::DownloadTask {
+                id: task_id.to_string(),
+                kind: kind.to_string(),
+                song_id: song_id.to_string(),
+                media_mid: platform.to_string(),
+                title: title.to_string(),
+                artist: artist.to_string(),
+                album: album.to_string(),
+                cover: cover.to_string(),
+                size: 0,
+                received: 0,
+                status: "downloading".into(),
+                error: String::new(),
+                file_path: String::new(),
+                created_at: now,
+                finished_at: 0,
+            },
+        );
+    }
+    let _ = app.emit(
+        "download://task",
+        json!({ "taskId": task_id, "status": "downloading" }),
+    );
+}
+
+/// 直下失败：把失败原因写进行内（下载管理行内直接展示），不只弹一次 toast
+fn fail_direct_download(app: &AppHandle, task_id: &str, err: &str) {
+    let st = app.state::<AppState>();
+    {
+        let conn = st.db.lock();
+        db::set_download_status(&conn, task_id, "failed", err, "");
+    }
+    let _ = app.emit(
+        "download://task",
+        json!({ "taskId": task_id, "status": "failed", "error": err }),
+    );
+}
+
+/// 内置 GD音乐台源的下载请求（歌名歌手即可定位，不依赖播放时的临时上下文）
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GdDownloadReq {
+    /// GD 源代码（netease/qq/kg/kw/mg）；也接受 LX 平台码，空则按 netease
+    #[serde(default)]
+    pub source: String,
+    /// GD 曲目 id（可选）：用于最近播放标记与任务行标识
+    #[serde(default)]
+    pub song_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub artist: String,
+    #[serde(default)]
+    pub album: String,
+    #[serde(default)]
+    pub cover: String,
+    #[serde(default)]
+    pub duration_ms: u64,
+    /// 本次下载指定的音质档；缺省或非法值回落到设置里的默认音质
+    #[serde(default)]
+    pub quality: Option<String>,
+}
+
+/// 下载内置源曲目到保存目录。与 LX 下载同构：取链 → 落盘 → 写标签 → 入库，
+/// 全程有任务行（下载中可见、失败带原因、完成可定位）。
+#[tauri::command]
+pub async fn gd_download(
+    app: AppHandle,
+    req: GdDownloadReq,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || gd_download_blocking(app, req))
+        .await
+        .map_err(|e| format!("下载任务异常终止: {e}"))?
+}
+
+fn gd_download_blocking(app: AppHandle, req: GdDownloadReq) -> Result<String, String> {
+    let title = req.title.trim().to_string();
+    if title.is_empty() {
+        return Err("歌曲标题为空".into());
+    }
+    let source = gd_source_of(&req.source);
+    let song_key = if req.song_id.trim().is_empty() {
+        format!("{source}-{title}")
+    } else {
+        req.song_id.trim().to_string()
+    };
+    let task_id = dl_task_id("gd", &song_key);
+    gd_download_as(app, req, &task_id, "gd", &source, &song_key)
+}
+
+/// 以指定任务行执行一次内置源直下（新建与失败重试共用同一套收尾逻辑）
+fn gd_download_as(
+    app: AppHandle,
+    req: GdDownloadReq,
+    task_id: &str,
+    row_kind: &str,
+    source: &str,
+    song_key: &str,
+) -> Result<String, String> {
+    let title = req.title.trim().to_string();
+    begin_direct_download(
+        &app,
+        task_id,
+        row_kind,
+        song_key,
+        &title,
+        &req.artist,
+        &req.album,
+        &req.cover,
+        source,
+    );
+    match gd_download_inner(&app, req, task_id, row_kind, source, song_key) {
+        Ok(name) => {
+            let _ = app.emit(
+                "download://task",
+                json!({ "taskId": task_id, "status": "done" }),
+            );
+            Ok(name)
+        }
+        Err(e) => {
+            fail_direct_download(&app, task_id, &e);
+            Err(e)
+        }
+    }
+}
+
+fn gd_download_inner(
+    app: &AppHandle,
+    req: GdDownloadReq,
+    task_id: &str,
+    row_kind: &str,
+    source: &str,
+    song_key: &str,
+) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let title = req.title.trim().to_string();
+    // 音质白名单与播放/下载设置一致，防止透传任意字符串进取链接口
+    let quality = match req.quality.as_deref().map(str::trim) {
+        Some(q) if matches!(q, "standard" | "medium" | "higher" | "high" | "lossless") => {
+            q.to_string()
+        }
+        _ => {
+            let conn = state.db.lock();
+            db::get_setting(&conn, "quality").unwrap_or_else(|| "high".to_string())
+        }
+    };
+    let br = gd_br_for(&quality);
+
+    // 取链 id / 歌词 id / 封面：GD 各端点用的 id 语义不同，优先一次检索拿全；
+    // 检索没命中就退回曲目 id 再试（部分源检索不可用但取链可用）
+    let kw = if req.artist.trim().is_empty() {
+        title.clone()
+    } else {
+        format!("{title} {}", req.artist.trim())
+    };
+    let songs = crate::gdstudio::search(crate::gdstudio::DEFAULT_BASE, source, &kw, 10);
+    let (url_id, lyric_id, cover) = match crate::gdstudio::pick(&songs, &title, &req.artist) {
+        Some(hit) => {
+            let uid = if hit.url_id.trim().is_empty() {
+                hit.id.clone()
+            } else {
+                hit.url_id.clone()
+            };
+            let lid = if hit.lyric_id.trim().is_empty() {
+                hit.id.clone()
+            } else {
+                hit.lyric_id.clone()
+            };
+            let src = if hit.source.trim().is_empty() {
+                source.to_string()
+            } else {
+                hit.source.clone()
+            };
+            let c = gd_cover_fallback(&src, &hit.pic_id, &title, &req.artist, &req.cover);
+            (uid, lid, c)
+        }
+        None => {
+            let sid = req.song_id.trim().to_string();
+            let c = gd_cover_fallback(source, "", &title, &req.artist, &req.cover);
+            (sid.clone(), sid, c)
+        }
+    };
+    if url_id.trim().is_empty() {
+        return Err("内置源没有匹配到这首歌曲，请确认歌名歌手".into());
+    }
+    let (url, _br_actual) =
+        crate::gdstudio::song_url(crate::gdstudio::DEFAULT_BASE, source, &url_id, br)?;
+    // 直链由本机发起服务端下载，取链已校验过，这里双保险
+    crate::gdstudio::validate_remote_url(&url)?;
+    let ext = ext_from_url(&url);
+
+    let dir = save_dir(&state);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建保存目录失败: {e}"))?;
+    let artist = sanitize_filename(&req.artist);
+    let stem = format!(
+        "{} - {}",
+        if artist.is_empty() { "Unknown" } else { &artist },
+        sanitize_filename(&title)
+    );
+    let dest = download_to_dir(app, "gd", &url, &dir, &stem, &ext, &title, Some(task_id))?;
+    let name = dest
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    // 歌词：GD 端点失败静默（标签里没有歌词不影响播放）
+    let lrc = crate::gdstudio::lyric(crate::gdstudio::DEFAULT_BASE, source, &lyric_id);
+    write_tags(
+        &dest,
+        &title,
+        &req.artist,
+        &req.album,
+        &cover,
+        if lrc.trim().is_empty() {
+            None
+        } else {
+            Some(lrc.as_str())
+        },
+    );
+
+    let mut track = crate::library::parse_track(&dest, &state.app_data).ok_or("解析歌曲失败")?;
+    if track.duration == 0.0 && req.duration_ms > 0 {
+        track.duration = req.duration_ms as f64 / 1000.0;
+    }
+    let now = db::now_secs();
+    {
+        let conn = state.db.lock();
+        db::upsert_track(&conn, &track);
+        db::mark_online_downloaded(&conn, "gd", song_key);
+        let _ = db::add_folder(&conn, &dir.to_string_lossy());
+        db::upsert_download_task(
+            &conn,
+            &crate::db::DownloadTask {
+                id: task_id.to_string(),
+                kind: row_kind.to_string(),
+                song_id: song_key.to_string(),
+                media_mid: source.to_string(),
+                title: title.clone(),
+                artist: req.artist.clone(),
+                album: req.album.clone(),
+                cover,
+                size: track.size,
+                received: track.size,
+                status: "done".into(),
+                error: String::new(),
+                file_path: dest.to_string_lossy().into_owned(),
+                created_at: now,
+                finished_at: now,
+            },
+        );
+    }
     Ok(name)
 }
 
@@ -2175,7 +2578,33 @@ pub async fn download_online(
 }
 
 fn download_online_blocking(app: AppHandle, req: OnlineSaveReq) -> Result<String, String> {
-    download_online_blocking_with_task(app, req, None)
+    // 直下也要有任务行：开下即进「下载中」，失败带原因，完成落「已下载」
+    let title = req.title.trim().to_string();
+    let task_id = dl_task_id(&req.kind, &req.id);
+    begin_direct_download(
+        &app,
+        &task_id,
+        &req.kind,
+        &req.id,
+        &title,
+        &req.artist,
+        &req.album,
+        &req.cover_url,
+        &req.media_mid,
+    );
+    match download_online_blocking_with_task(app.clone(), req, Some(task_id.clone())) {
+        Ok(name) => {
+            let _ = app.emit(
+                "download://task",
+                json!({ "taskId": task_id, "status": "done" }),
+            );
+            Ok(name)
+        }
+        Err(e) => {
+            fail_direct_download(&app, &task_id, &e);
+            Err(e)
+        }
+    }
 }
 
 /// 与 `download_online_blocking` 相同，但额外把进度写进下载任务表。
@@ -2254,17 +2683,15 @@ fn download_online_blocking_with_task(
     if track.duration == 0.0 && req.duration_ms > 0 {
         track.duration = req.duration_ms as f64 / 1000.0;
     }
-    let direct = task_id.is_none();
     // 队列路径的 id 由 enqueue_download 生成，与这里推导的一致
-    let tid = task_id.unwrap_or_else(|| dl_task_id(&req.kind, &req.id));
+    let tid = task_id.clone().unwrap_or_else(|| dl_task_id(&req.kind, &req.id));
     {
         let conn = state.db.lock();
         db::upsert_track(&conn, &track);
         db::mark_online_downloaded(&conn, &req.kind, &req.id);
         let _ = db::add_folder(&conn, &dir.to_string_lossy());
         // 下载管理页需要真实文件路径（"打开所在位置"与删除文件都靠它）。
-        // 右键"下载到本地"此前完全不进任务表，歌曲在下载管理里看不到，
-        // 统一按成品登记整行（队列路径重复 upsert 幂等，只补状态与路径）
+        // 队列路径的行由 enqueue_download 建过，这里幂等补状态与路径
         let now = db::now_secs();
         db::upsert_download_task(
             &conn,
@@ -2286,11 +2713,6 @@ fn download_online_blocking_with_task(
                 finished_at: now,
             },
         );
-    }
-    // 队列路径由 run_download_job 统一发状态事件；即时下载自己发，
-    // 否则下载管理页不会刷新出这条新纪录
-    if direct {
-        let _ = app.emit("download://task", json!({ "taskId": tid, "status": "done" }));
     }
     Ok(name)
 }
@@ -2432,18 +2854,50 @@ pub async fn enqueue_download(
     Ok(tid)
 }
 
-/// 重试：任务重置为 queued 并重新入队
+/// 重试：任务重置为 queued 并重新入队。
+///
+/// 内置源 / LX 音源的任务改走 GD 直下重试：凭歌名歌手重新定位，
+/// 不依赖原音源是否还启用；失败原因同样落回这一行。
 #[tauri::command]
 pub async fn retry_download(
     app: AppHandle,
     state: State<'_, AppState>,
     task_id: String,
 ) -> Result<(), String> {
+    let t = {
+        let conn = state.db.lock();
+        db::get_download_task(&conn, &task_id).ok_or("任务不存在")?
+    };
+    if t.kind == "gd" || t.kind == "lx" {
+        if t.title.trim().is_empty() {
+            return Err("该记录缺少歌名，无法重试".into());
+        }
+        let req = GdDownloadReq {
+            // media_mid 存的是平台码（wy/tx/kg…）或 GD 源名
+            source: gd_source_of(&t.media_mid),
+            song_id: String::new(),
+            title: t.title.clone(),
+            artist: t.artist.clone(),
+            album: t.album.clone(),
+            cover: t.cover.clone(),
+            duration_ms: 0,
+            quality: None,
+        };
+        let kind = t.kind.clone();
+        let source = gd_source_of(&t.media_mid);
+        let song_key = t.song_id.clone();
+        {
+            let conn = state.db.lock();
+            db::set_download_status(&conn, &task_id, "queued", "", "");
+        }
+        let tid = task_id.clone();
+        std::thread::spawn(move || {
+            let _ = gd_download_as(app, req, &tid, &kind, &source, &song_key);
+        });
+        return Ok(());
+    }
     let req = {
         let conn = state.db.lock();
-        let Some(t) = db::get_download_task(&conn, &task_id) else {
-            return Err("任务不存在".into());
-        };
         db::set_download_status(&conn, &task_id, "queued", "", "");
         OnlineSaveReq {
             kind: t.kind,

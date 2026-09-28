@@ -155,7 +155,8 @@ export interface LyricsPayload {
 
 export interface TrackInfo {
   id: number | null;
-  kind: "track" | "url" | "netease" | "qq" | "kugou";
+  /** "gd" = 内置源（GD音乐台）；此时 lxPlatform/lxSongId 承载 GD 身份 */
+  kind: "track" | "url" | "netease" | "qq" | "kugou" | "gd";
   path: string;
   title: string;
   artist: string;
@@ -166,7 +167,7 @@ export interface TrackInfo {
   qid?: string | null;
   kgid?: string | null;
   quality?: string | null;
-  /** LX 音源身份（仅来自 LX 导入音源时携带，用于回查歌词）：音源 id / 平台 / 歌曲 id */
+  /** LX 音源身份：音源 id / 平台 / 歌曲 id；内置源（gd）复用后两者存 GD 平台码与曲目 id */
   lxSourceId?: number | null;
   lxPlatform?: string | null;
   lxSongId?: string | null;
