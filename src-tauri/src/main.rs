@@ -496,6 +496,18 @@ fn main() {
 
             let conn = db::init(&app_data.join("library.db"))?;
 
+            // 下载管理补登记（幂等）：保存目录第一层的成品歌此前不进任务表，
+            // 歌曲下完在下载管理里看不到，"打开所在位置"也无从指向真实目录
+            {
+                let custom = db::get_setting(&conn, "save_dir").unwrap_or_default();
+                let dir = if custom.is_empty() {
+                    app_data.join("下载音乐")
+                } else {
+                    std::path::PathBuf::from(custom)
+                };
+                db::backfill_download_tasks(&conn, &dir);
+            }
+
             // 读取用户设置
             let volume: f32 = db::get_setting(&conn, "volume")
                 .and_then(|v| v.parse().ok())

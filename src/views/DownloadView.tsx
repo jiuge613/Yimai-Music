@@ -32,7 +32,17 @@ const fmtTime = (ts: number) => {
 };
 
 const platformName = (k: string) =>
-  k === "netease" ? "网易云" : k === "qq" ? "QQ音乐" : k === "kugou" ? "酷狗" : k === "lx" ? "音源" : k;
+  k === "netease"
+    ? "网易云"
+    : k === "qq"
+      ? "QQ音乐"
+      : k === "kugou"
+        ? "酷狗"
+        : k === "lx"
+          ? "音源"
+          : k === "local"
+            ? "本地"
+            : k;
 
 /** 下载管理：已下载 / 下载中 两个页签，行内可重试、定位、删除。
  *  队列下载由后端 worker 执行，这里只负责展示与操作。 */

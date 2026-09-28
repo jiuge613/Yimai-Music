@@ -1254,7 +1254,7 @@ pub fn reorder_playlist(conn: &Connection, pid: i64, rowids: &[i64]) {
 // ---------- 下载管理 ----------
 
 /// 一条下载任务（列表页的一行）
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadTask {
     pub id: String,
@@ -1427,6 +1427,66 @@ pub fn clear_download_tasks(conn: &Connection, status: &str, delete_files: bool)
     }
     files
 }
+
+/// 启动时补登记：右键"下载到本地"/播放条直下的歌曲此前从不写任务表，
+/// 下载管理里看不到，"打开所在位置"也无从指向真实目录。
+/// 把保存目录第一层、任务表还没有记录的成品文件补成 done 行（幂等）。
+pub fn backfill_download_tasks(conn: &Connection, save_dir: &std::path::Path) {
+    let dir_norm = save_dir
+        .to_string_lossy()
+        .trim_end_matches(['\\', '/'])
+        .to_string();
+    let mut existing: HashSet<String> = HashSet::new();
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT file_path FROM download_tasks WHERE file_path != ''")
+    {
+        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+            for p in rows.flatten() {
+                existing.insert(p);
+            }
+        }
+    }
+    let mut added = 0;
+    for t in list_tracks(conn) {
+        if t.missing || existing.contains(&t.path) {
+            continue;
+        }
+        let p = std::path::Path::new(&t.path);
+        // 只补保存目录第一层：直下产物都平铺在这里，子目录是用户自己整理的
+        let Some(parent) = p.parent() else { continue };
+        let parent_str = parent.to_string_lossy();
+        let parent_norm = parent_str.trim_end_matches(['\\', '/']);
+        if !parent_norm.eq_ignore_ascii_case(&dir_norm) || !p.is_file() {
+            continue;
+        }
+        let ts = if t.mtime > 0 { t.mtime } else { now_secs() };
+        upsert_download_task(
+            conn,
+            &DownloadTask {
+                id: format!("file:{}", t.id),
+                kind: "local".into(),
+                song_id: t.id.to_string(),
+                media_mid: String::new(),
+                title: t.title,
+                artist: t.artist,
+                album: t.album,
+                cover: t.cover,
+                size: t.size,
+                received: t.size,
+                status: "done".into(),
+                error: String::new(),
+                file_path: t.path,
+                created_at: ts,
+                finished_at: ts,
+            },
+        );
+        added += 1;
+    }
+    if added > 0 {
+        eprintln!("[db] 补登记下载任务 {added} 条");
+    }
+}
+
 /// 统计各状态数量，供列表页头部展示。
 #[allow(dead_code)]
 pub fn download_counts(conn: &Connection) -> std::collections::HashMap<String, i64> {
@@ -1642,5 +1702,97 @@ mod migration_tests {
         // 已带远程标识的列表不再参与同名匹配
         let miss = find_playlist_by_remote(&conn, "netease", "888", "不存在的名字");
         assert!(miss.is_none());
+    }
+
+    /// 补登记（backfill_download_tasks）只认保存目录第一层、真实存在、
+    /// 且任务表里还没有的成品歌；重复执行幂等。下载管理的
+    /// "打开所在位置"完全依赖这里的 file_path 指向真实保存目录。
+    #[test]
+    fn backfill_registers_save_dir_files_once() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        migrate(&conn);
+
+        // 真实文件系统：保存目录第一层 / 子目录 / 目录外 / 有记录但文件不存在
+        let tmp = std::env::temp_dir().join(format!("yimai_backfill_{}", std::process::id()));
+        let save = tmp.join("下载目录");
+        let sub = save.join("子目录");
+        std::fs::create_dir_all(&sub).unwrap();
+        let in_save = save.join("周传雄 - 黄昏.mp3");
+        let in_sub = sub.join("深藏.flac");
+        let outside = tmp.join("别处.mp3");
+        let ghost = save.join("幽灵.mp3");
+        std::fs::write(&in_save, b"x").unwrap();
+        std::fs::write(&in_sub, b"x").unwrap();
+        std::fs::write(&outside, b"x").unwrap();
+
+        let mut ins = conn
+            .prepare("INSERT INTO tracks(path, title, artist, size, mtime) VALUES(?1,?2,?3,7,123)")
+            .unwrap();
+        ins.execute(params![in_save.to_string_lossy().to_string(), "黄昏", "周传雄"])
+            .unwrap();
+        ins.execute(params![in_sub.to_string_lossy().to_string(), "深藏", ""])
+            .unwrap();
+        ins.execute(params![outside.to_string_lossy().to_string(), "别处", ""])
+            .unwrap();
+        ins.execute(params![ghost.to_string_lossy().to_string(), "幽灵", ""])
+            .unwrap();
+        drop(ins);
+
+        backfill_download_tasks(&conn, &save);
+        let rows = list_download_tasks(&conn, "");
+        assert_eq!(
+            rows.len(),
+            1,
+            "只有保存目录第一层真实存在的成品歌补登记：{rows:?}"
+        );
+        let r = &rows[0];
+        assert_eq!(r.file_path, in_save.to_string_lossy());
+        assert_eq!(r.status, "done");
+        assert_eq!(r.kind, "local");
+        assert!(r.id.starts_with("file:"));
+        assert_eq!(r.size, 7);
+        assert_eq!(r.created_at, 123, "创建时间取文件 mtime，列表按它倒序");
+
+        // 幂等：重复跑不新增
+        backfill_download_tasks(&conn, &save);
+        assert_eq!(list_download_tasks(&conn, "").len(), 1);
+
+        // file_path 已被任务表登记的（后来正常下载产生的行）跳过，不造重复行
+        let in_save2 = save.join("迟志强 - 铁窗泪.mp3");
+        std::fs::write(&in_save2, b"x").unwrap();
+        conn.execute(
+            "INSERT INTO tracks(path, title, artist, size, mtime) VALUES(?1,?2,?3,7,124)",
+            params![in_save2.to_string_lossy().to_string(), "铁窗泪", "迟志强"],
+        )
+        .unwrap();
+        upsert_download_task(
+            &conn,
+            &DownloadTask {
+                id: "netease:999".into(),
+                kind: "netease".into(),
+                song_id: "999".into(),
+                media_mid: String::new(),
+                title: "铁窗泪".into(),
+                artist: "迟志强".into(),
+                album: String::new(),
+                cover: String::new(),
+                size: 7,
+                received: 7,
+                status: "done".into(),
+                error: String::new(),
+                file_path: in_save2.to_string_lossy().into_owned(),
+                created_at: 1,
+                finished_at: 1,
+            },
+        );
+        backfill_download_tasks(&conn, &save);
+        assert_eq!(
+            list_download_tasks(&conn, "").len(),
+            2,
+            "file_path 已有任务行的文件不再补登记"
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

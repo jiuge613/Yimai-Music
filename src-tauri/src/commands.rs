@@ -1337,12 +1337,39 @@ fn lx_download_blocking(app: AppHandle, req: LxDownloadReq) -> Result<String, St
     if track.duration == 0.0 && req.duration_ms > 0 {
         track.duration = req.duration_ms as f64 / 1000.0;
     }
+    let song_key = format!("{}-{}", req.source_id, req.song_id);
+    let task_id = dl_task_id("lx", &song_key);
     {
         let conn = state.db.lock();
         db::upsert_track(&conn, &track);
-        db::mark_online_downloaded(&conn, "lx", &format!("{}-{}", req.source_id, req.song_id));
+        db::mark_online_downloaded(&conn, "lx", &song_key);
         let _ = db::add_folder(&conn, &dir.to_string_lossy());
+        // 即时下载也要登记任务行，否则这首歌在下载管理里根本看不到，
+        // "打开所在位置"也就没有指向真实保存目录的行
+        let now = db::now_secs();
+        db::upsert_download_task(
+            &conn,
+            &crate::db::DownloadTask {
+                id: task_id.clone(),
+                kind: "lx".into(),
+                song_id: song_key,
+                media_mid: String::new(),
+                title: title.clone(),
+                artist: req.artist.clone(),
+                album: req.album.clone(),
+                cover: req.cover.clone(),
+                size: track.size,
+                received: track.size,
+                status: "done".into(),
+                error: String::new(),
+                file_path: dest.to_string_lossy().into_owned(),
+                created_at: now,
+                finished_at: now,
+            },
+        );
     }
+    // 通知下载管理页刷新（监听器收到后整刷列表）
+    let _ = app.emit("download://task", json!({ "taskId": task_id, "status": "done" }));
     Ok(name)
 }
 
@@ -2227,21 +2254,43 @@ fn download_online_blocking_with_task(
     if track.duration == 0.0 && req.duration_ms > 0 {
         track.duration = req.duration_ms as f64 / 1000.0;
     }
+    let direct = task_id.is_none();
+    // 队列路径的 id 由 enqueue_download 生成，与这里推导的一致
+    let tid = task_id.unwrap_or_else(|| dl_task_id(&req.kind, &req.id));
     {
         let conn = state.db.lock();
         db::upsert_track(&conn, &track);
         db::mark_online_downloaded(&conn, &req.kind, &req.id);
         let _ = db::add_folder(&conn, &dir.to_string_lossy());
-        // 下载管理页需要真实文件路径（"打开所在位置"与删除文件都靠它）
-        if let Some(tid) = task_id.as_deref() {
-            db::set_download_status(
-                &conn,
-                tid,
-                "done",
-                "",
-                &dest.to_string_lossy(),
-            );
-        }
+        // 下载管理页需要真实文件路径（"打开所在位置"与删除文件都靠它）。
+        // 右键"下载到本地"此前完全不进任务表，歌曲在下载管理里看不到，
+        // 统一按成品登记整行（队列路径重复 upsert 幂等，只补状态与路径）
+        let now = db::now_secs();
+        db::upsert_download_task(
+            &conn,
+            &crate::db::DownloadTask {
+                id: tid.clone(),
+                kind: req.kind.clone(),
+                song_id: req.id.clone(),
+                media_mid: req.media_mid.clone(),
+                title: title.clone(),
+                artist: req.artist.clone(),
+                album: req.album.clone(),
+                cover: req.cover_url.clone(),
+                size: track.size,
+                received: track.size,
+                status: "done".into(),
+                error: String::new(),
+                file_path: dest.to_string_lossy().into_owned(),
+                created_at: now,
+                finished_at: now,
+            },
+        );
+    }
+    // 队列路径由 run_download_job 统一发状态事件；即时下载自己发，
+    // 否则下载管理页不会刷新出这条新纪录
+    if direct {
+        let _ = app.emit("download://task", json!({ "taskId": tid, "status": "done" }));
     }
     Ok(name)
 }
@@ -2453,8 +2502,17 @@ pub async fn open_download_location(
     if path.is_empty() || !std::path::Path::new(&path).exists() {
         return Err("文件不存在或已移动".into());
     }
+    // Windows 路径不可能含引号；提前拦掉，保证下面拼进命令行的只有路径本身
+    if path.contains('"') {
+        return Err("路径包含非法字符".into());
+    }
+    // explorer 不按标准 argv 规则解析命令行，/select, 后面必须跟原样的带引号
+    // 路径。走 .arg() 会被 Rust 转义成 "/select,\"...\""，explorer 认不出来，
+    // 只会打开默认位置。raw_arg 直接写 CreateProcess 命令行（不经过 shell），
+    // 与手敲 explorer /select,"..." 等价。
+    use std::os::windows::process::CommandExt;
     std::process::Command::new("explorer")
-        .arg(format!("/select,\"{path}\""))
+        .raw_arg(format!("/select,\"{path}\""))
         .spawn()
         .map_err(|e| format!("打开资源管理器失败: {e}"))?;
     Ok(())
